@@ -2,15 +2,28 @@ import streamlit as st
 import pandas as pd
 from thefuzz import fuzz
 import io
+import re # Added for regex text cleaning
 
 # 1. Page Configuration
 st.set_page_config(page_title="Excel Spellchecker", layout="wide")
-st.title("My Excel Spellchecker (Fuzzy + Exclusions)")
+st.title("My Excel Spellchecker (Debug Mode)")
 
-# --- HELPER FUNCTION TO CLEAN HEADERS ---
+# --- HELPER FUNCTION TO SUPER CLEAN HEADERS ---
 def clean_headers(df):
-    """Removes newlines and extra spaces from column names."""
-    df.columns = [str(c).replace("\n", " ").strip() for c in df.columns]
+    """
+    1. Converts to string.
+    2. Removes newlines.
+    3. Removes leading/trailing spaces.
+    4. Replaces multiple spaces with a single space.
+    """
+    new_columns = []
+    for c in df.columns:
+        s = str(c).replace("\n", " ").strip()
+        # " ".join(s.split()) removes double spaces inside the text
+        s = " ".join(s.split())
+        new_columns.append(s)
+    
+    df.columns = new_columns
     return df
 
 # 2. Load Master File (Cached)
@@ -46,14 +59,23 @@ if uploaded_file:
     col1, col2 = st.columns(2)
     with col1:
         # Select ID Column
-        id_col = st.selectbox("Which column contains the Unique ID?", master_df.columns)
+        # Ensure we pick a column that actually exists after cleaning
+        valid_ids = [c for c in master_df.columns if c in user_df.columns]
+        if not valid_ids:
+            st.error("No matching columns found between Master and User file!")
+            st.stop()
+            
+        id_col = st.selectbox("Which column contains the Unique ID?", valid_ids)
+        
     with col2:
         # Slider for Fuzzy Matching
         threshold = st.slider("Fuzzy Match Threshold (0-100)", min_value=50, max_value=100, value=85)
 
     # --- IGNORE COLUMNS SECTION ---
+    # These strings must match the CLEANED headers exactly
     default_ignore = ["Glasses name", "Meta description", "XML description", "Glasses model", "Glasses color code"]
-    # Only keep defaults that actually exist in the uploaded file
+    
+    # Filter defaults to ensure they exist in the file
     valid_defaults = [c for c in default_ignore if c in user_df.columns]
     
     ignore_cols = st.multiselect(
@@ -62,27 +84,21 @@ if uploaded_file:
         default=valid_defaults
     )
 
-    # --- SAFETY CHECK ---
-    if id_col not in user_df.columns:
-        st.error(f"⚠️ Error: The column '{id_col}' exists in the Master file but NOT in your uploaded file.")
-        st.stop()
-    
     # Button to trigger check
     if st.button("Run Spellcheck Comparison"):
         
         st.write("Checking... please wait.")
+
+        # --- DEBUG INFO ---
+        # We explicitly calculate the list here to verify what is happening
+        columns_to_check = [c for c in user_df.columns if c != id_col and c not in ignore_cols]
         
-        # DEBUG: Show user what is being ignored
-        if ignore_cols:
-            st.caption(f"🙈 Ignoring these columns: {', '.join(ignore_cols)}")
+        with st.expander("🕵️ Debug: See which columns are being checked", expanded=True):
+            st.write(f"**🙈 Ignored Columns ({len(ignore_cols)}):** {ignore_cols}")
+            st.write(f"**✅ Columns being checked ({len(columns_to_check)}):** {columns_to_check}")
 
         mistakes = []
         master_indexed = master_df.set_index(id_col)
-        
-        # --- ROBUST LOGIC CHANGE ---
-        # Create a specific list of columns to check right now. 
-        # We exclude the ID column and any Ignored columns immediately.
-        columns_to_check = [c for c in user_df.columns if c != id_col and c not in ignore_cols]
         
         for index, user_row in user_df.iterrows():
             user_id = user_row[id_col]
