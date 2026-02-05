@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-from thefuzz import fuzz # New library for fuzzy matching
+from thefuzz import fuzz
+import io
 
 # 1. Page Configuration
 st.set_page_config(page_title="Excel Spellchecker", layout="wide")
-st.title("My Excel Spellchecker (Fuzzy + Case Sensitive)")
+st.title("My Excel Spellchecker (Fuzzy + Exclusions)")
 
 # --- HELPER FUNCTION TO CLEAN HEADERS ---
 def clean_headers(df):
@@ -45,16 +46,28 @@ if uploaded_file:
     
     col1, col2 = st.columns(2)
     with col1:
-        # Select ID Column from Master headers
+        # Select ID Column
         id_col = st.selectbox("Which column contains the Unique ID?", master_df.columns)
     with col2:
-        # Slider for Fuzzy Matching Strictness
-        threshold = st.slider("Fuzzy Match Threshold (0-100)", min_value=50, max_value=100, value=85, help="Lower values allow more typos. Higher values require closer matches.")
+        # Slider for Fuzzy Matching
+        threshold = st.slider("Fuzzy Match Threshold (0-100)", min_value=50, max_value=100, value=85, help="Lower values allow more typos.")
 
-    # --- SAFETY CHECK: Does this column exist in the User file? ---
+    # --- NEW: IGNORE COLUMNS SECTION ---
+    # These are the defaults you requested
+    default_ignore = ["Glasses name", "Meta description", "XML description", "Glasses model", "Glasses color code"]
+    
+    # Filter out defaults that don't actually exist in the file to avoid errors
+    valid_defaults = [c for c in default_ignore if c in user_df.columns]
+    
+    ignore_cols = st.multiselect(
+        "Select columns to IGNORE during spellcheck:",
+        options=user_df.columns,
+        default=valid_defaults
+    )
+
+    # --- SAFETY CHECK ---
     if id_col not in user_df.columns:
         st.error(f"⚠️ Error: The column '{id_col}' exists in the Master file but NOT in your uploaded file.")
-        st.warning(f"Your uploaded columns are: {list(user_df.columns)}")
         st.stop()
     
     # Button to trigger check
@@ -62,13 +75,9 @@ if uploaded_file:
         
         st.write("Checking... please wait.")
         
-        # --- THE COMPARISON LOGIC ---
         mistakes = []
-        
-        # Optimize: Set ID as index for faster lookups
         master_indexed = master_df.set_index(id_col)
         
-        # Loop through User file
         for index, user_row in user_df.iterrows():
             user_id = user_row[id_col]
             
@@ -84,30 +93,26 @@ if uploaded_file:
                 })
                 continue 
 
-            # Get the matching Master row
+            # Get Master row
             master_row = master_indexed.loc[user_id]
-            
-            # Handle duplicates in master (if multiple rows have same ID, take the first one)
             if isinstance(master_row, pd.DataFrame):
                 master_row = master_row.iloc[0]
 
             # Compare columns
             for column in user_df.columns:
-                if column == id_col:
+                # SKIP THE ID COLUMN AND IGNORED COLUMNS
+                if column == id_col or column in ignore_cols:
                     continue 
                 
-                # Check if column exists in Master to compare
                 if column in master_df.columns:
                     val_user = str(user_row[column]).strip()
                     val_master = str(master_row[column]).strip()
                     
-                    # --- NEW LOGIC: TIERED CHECKING ---
-                    
-                    # 1. Exact Match? (Fastest check)
+                    # 1. Exact Match
                     if val_user == val_master:
-                        continue # It's perfect, move to next column
+                        continue 
 
-                    # 2. Case Sensitivity Check
+                    # 2. Case Mismatch
                     if val_user.lower() == val_master.lower():
                         mistakes.append({
                             "Row #": index + 2,
@@ -119,8 +124,7 @@ if uploaded_file:
                         })
                         continue
 
-                    # 3. Fuzzy Match Check
-                    # We calculate how similar they are (0 to 100)
+                    # 3. Fuzzy Match
                     match_score = fuzz.ratio(val_user.lower(), val_master.lower())
                     
                     if match_score >= threshold:
@@ -128,12 +132,10 @@ if uploaded_file:
                             "Row #": index + 2,
                             "ID": user_id,
                             "Column": column,
-                            "Error Type": f"Typo ({match_score}%)", # Shows similarity score
+                            "Error Type": f"Typo ({match_score}%)",
                             "Your Value": val_user,
                             "Master Value": val_master
                         })
-                    
-                    # 4. Complete Mismatch (Score is below threshold)
                     else:
                         mistakes.append({
                             "Row #": index + 2,
@@ -148,11 +150,22 @@ if uploaded_file:
         if mistakes:
             st.error(f"Found {len(mistakes)} discrepancies!")
             results_df = pd.DataFrame(mistakes)
-            
-            # Sort so 'Wrong Value' and 'Typo' are grouped nicely
             results_df = results_df.sort_values(by=["Error Type", "Row #"])
-            
             st.dataframe(results_df, use_container_width=True)
+            
+            # --- DOWNLOAD BUTTON ---
+            # Create an in-memory buffer for the Excel file
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                results_df.to_excel(writer, index=False, sheet_name='Mistakes')
+                
+            st.download_button(
+                label="📥 Download Mistakes Report",
+                data=buffer,
+                file_name="spellcheck_mistakes.xlsx",
+                mime="application/vnd.ms-excel"
+            )
+            
         else:
             st.balloons()
             st.success("Perfect Match! No mistakes found.")
