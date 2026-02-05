@@ -5,199 +5,160 @@ import io
 
 # 1. Page Configuration
 st.set_page_config(page_title="Excel Spellchecker", layout="wide")
-st.title("My Excel Spellchecker (Smart & Clean)")
+st.title("Excel Spellchecker (Fixed Ignored Columns)")
 
-# --- HELPER: CLEAN & UNIQUE HEADERS ---
-def clean_headers(df):
+# --- 2. CONFIGURATION ---
+# We define the columns to ignore here. 
+# The code will look for these exact names (trimmed of spaces).
+DEFAULT_IGNORE = [
+    "Glasses name", 
+    "Meta description", 
+    "XML description", 
+    "Glasses model", 
+    "Glasses color code"
+]
+
+# --- 3. HELPER FUNCTION ---
+def load_and_clean(file_path_or_buffer):
     """
-    Cleans headers and handles duplicates.
-    If two columns are named "Price", the second becomes "Price_2".
+    Loads Excel and cleans headers to ensure matching works.
+    Removes leading/trailing spaces from column names.
     """
-    # 1. Basic Clean
-    clean_names = []
-    for c in df.columns:
-        s = str(c).replace("\n", " ").strip()
-        s = " ".join(s.split()) # Remove double spaces
-        clean_names.append(s)
-    
-    # 2. Enforce Uniqueness
-    seen = {}
-    final_names = []
-    for name in clean_names:
-        if name in seen:
-            seen[name] += 1
-            final_names.append(f"{name}_{seen[name]}")
-        else:
-            seen[name] = 1
-            final_names.append(name)
-            
-    df.columns = final_names
+    df = pd.read_excel(file_path_or_buffer, dtype=str)
+    # Strip whitespace from column names to match the Ignore List
+    df.columns = [str(c).strip() for c in df.columns]
     return df
 
-# 2. Load Master File (Cached)
-@st.cache_data
-def load_master():
-    df = pd.read_excel("master.xlsx", dtype=str)
-    df = clean_headers(df)
-    return df
-
+# 4. Load Master File
 try:
-    master_df = load_master()
-    st.success("Master Database Loaded Successfully.")
+    master_df = load_and_clean("master.xlsx")
+    st.success("✅ Master Database Loaded.")
 except Exception as e:
-    st.error(f"Could not find 'master.xlsx'. Make sure it is in the folder! Error: {e}")
+    st.error(f"❌ Could not find 'master.xlsx'. Error: {e}")
     st.stop()
 
-# 3. User Upload Section
+# 5. User Upload
 st.divider()
 st.subheader("1. Upload your file")
 uploaded_file = st.file_uploader("Choose your Excel file", type=['xlsx'])
 
 if uploaded_file:
-    # Load user data
-    user_df = pd.read_excel(uploaded_file, dtype=str)
-    user_df = clean_headers(user_df)
-    
+    user_df = load_and_clean(uploaded_file)
     st.info(f"Uploaded file has {len(user_df)} rows.")
 
-    # 4. Settings Section
+    # 6. Settings
     st.divider()
     st.subheader("2. Settings")
     
     col1, col2 = st.columns(2)
     with col1:
-        # Filter strictly to shared columns to avoid crashes
+        # Only show columns that exist in both files
         common_cols = [c for c in master_df.columns if c in user_df.columns]
         if not common_cols:
-            st.error("No matching columns found between files!")
+            st.error("No matching columns found!")
             st.stop()
-            
-        id_col = st.selectbox("Which column contains the Unique ID?", common_cols)
+        id_col = st.selectbox("Unique ID Column", common_cols)
 
     with col2:
-        threshold = st.slider("Fuzzy Match Threshold (0-100)", 50, 100, 85)
+        threshold = st.slider("Fuzzy Match Strictness", 50, 100, 85)
 
-    # --- IGNORE COLUMNS SECTION ---
-    # Default list
-    defaults = ["Glasses name", "Meta description", "XML description", "Glasses model", "Glasses color code"]
-    # Only verify against the NOW CLEANED user_df columns
-    valid_defaults = [c for c in defaults if c in user_df.columns]
+    # --- IGNORE LOGIC ---
+    # We pre-select the DEFAULT_IGNORE columns if they exist in the user file
+    valid_defaults = [c for c in DEFAULT_IGNORE if c in user_df.columns]
     
     ignore_cols = st.multiselect(
-        "Select columns to IGNORE (Typing removes them from check):",
+        "Columns to IGNORE (Defaulted to your list):",
         options=user_df.columns,
         default=valid_defaults
     )
 
-    # Button to trigger check
-    if st.button("Run Spellcheck Comparison"):
-        
+    if st.button("Run Check"):
         st.write("Checking... please wait.")
-
-        # --- PREPARE LISTS ---
-        # 1. We start with ALL user columns
-        # 2. We REMOVE the ID column
-        # 3. We REMOVE any column inside 'ignore_cols'
-        columns_to_check = [
-            c for c in user_df.columns 
-            if c != id_col and c not in ignore_cols
-        ]
         
-        # DEBUG: Verify we aren't checking ignored stuff
-        # st.write(f"Checking these {len(columns_to_check)} columns: {columns_to_check}")
-
         mistakes = []
         master_indexed = master_df.set_index(id_col)
         
+        # Define exactly which columns to process
+        # Logic: Column is NOT the ID AND Column is NOT in the ignore list
+        cols_to_check = [c for c in user_df.columns if c != id_col and c not in ignore_cols]
+
         for index, user_row in user_df.iterrows():
             user_id = user_row[id_col]
             
-            # A. ID Check
+            # 1. Check ID existence
             if user_id not in master_indexed.index:
                 mistakes.append({
-                    "Row #": index + 2,
+                    "Row": index + 2,
                     "ID": user_id,
                     "Column": "ID Check",
-                    "Error Type": "ID Missing",
+                    "Error": "ID Missing in Master",
                     "Your Value": user_id,
-                    "Master Value": "Not Found"
+                    "Master Value": "---"
                 })
                 continue 
 
-            # B. Get Master Data
+            # 2. Get Master Data
             master_row = master_indexed.loc[user_id]
-            # Handle duplicate IDs in Master
             if isinstance(master_row, pd.DataFrame):
                 master_row = master_row.iloc[0]
 
-            # C. Check Columns
-            for column in columns_to_check:
-                
-                # Only check if Master actually has this column
-                if column in master_df.columns:
-                    val_user = str(user_row[column]).strip()
-                    val_master = str(master_row[column]).strip()
-                    
-                    # Exact Match (Pass)
-                    if val_user == val_master:
-                        continue 
+            # 3. Check specific columns
+            for col in cols_to_check:
+                # If master doesn't have this col, skip it
+                if col not in master_df.columns:
+                    continue
 
-                    # Case Mismatch (Error)
-                    if val_user.lower() == val_master.lower():
-                        mistakes.append({
-                            "Row #": index + 2,
-                            "ID": user_id,
-                            "Column": column,
-                            "Error Type": "Case Mismatch",
-                            "Your Value": val_user,
-                            "Master Value": val_master
-                        })
-                        continue
+                val_user = str(user_row[col]).strip()
+                val_master = str(master_row[col]).strip()
 
-                    # Fuzzy Match / Typo (Error)
-                    score = fuzz.ratio(val_user.lower(), val_master.lower())
-                    
-                    if score >= threshold:
-                        mistakes.append({
-                            "Row #": index + 2,
-                            "ID": user_id,
-                            "Column": column,
-                            "Error Type": f"Typo ({score}%)",
-                            "Your Value": val_user,
-                            "Master Value": val_master
-                        })
-                    else:
-                        mistakes.append({
-                            "Row #": index + 2,
-                            "ID": user_id,
-                            "Column": column,
-                            "Error Type": "Wrong Value",
-                            "Your Value": val_user,
-                            "Master Value": val_master
-                        })
+                # EXACT MATCH -> Pass
+                if val_user == val_master:
+                    continue 
+
+                # CASE MATCH -> Error
+                if val_user.lower() == val_master.lower():
+                    mistakes.append({
+                        "Row": index + 2,
+                        "ID": user_id,
+                        "Column": col,
+                        "Error": "Case Mismatch",
+                        "Your Value": val_user,
+                        "Master Value": val_master
+                    })
+                    continue
+
+                # FUZZY MATCH -> Error
+                score = fuzz.ratio(val_user.lower(), val_master.lower())
+                if score >= threshold:
+                    mistakes.append({
+                        "Row": index + 2,
+                        "ID": user_id,
+                        "Column": col,
+                        "Error": f"Typo ({score}%)",
+                        "Your Value": val_user,
+                        "Master Value": val_master
+                    })
+                else:
+                    mistakes.append({
+                        "Row": index + 2,
+                        "ID": user_id,
+                        "Column": col,
+                        "Error": "Wrong Value",
+                        "Your Value": val_user,
+                        "Master Value": val_master
+                    })
 
         # --- OUTPUT ---
         if mistakes:
-            st.error(f"Found {len(mistakes)} discrepancies.")
-            results_df = pd.DataFrame(mistakes)
-            
-            # Sort for readability
-            results_df = results_df.sort_values(by=["Error Type", "Row #"])
-            
-            # Show on screen
-            st.dataframe(results_df, use_container_width=True)
+            st.error(f"Found {len(mistakes)} issues.")
+            res = pd.DataFrame(mistakes)
+            st.dataframe(res, use_container_width=True)
             
             # Download
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                results_df.to_excel(writer, index=False, sheet_name='Mistakes')
+                res.to_excel(writer, index=False)
                 
-            st.download_button(
-                label="📥 Download Only Mistakes",
-                data=buffer,
-                file_name="spellcheck_mistakes.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            st.download_button("📥 Download Report", buffer, "mistakes.xlsx")
         else:
-            st.balloons()
-            st.success("Perfect Match! No mistakes found in the selected columns.")
+            st.success("✅ Perfect Match!")
