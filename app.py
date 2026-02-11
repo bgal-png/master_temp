@@ -5,7 +5,7 @@ import io
 
 # 1. Page Configuration
 st.set_page_config(page_title="Excel Validator v2", layout="wide")
-st.title("Excel Validator: Glasses Edition 👓")
+st.title("CAN YOU HEAR ME??? 📢")
 
 # --- HELPER: ROBUST LOADER ---
 @st.cache_data
