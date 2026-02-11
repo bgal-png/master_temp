@@ -47,20 +47,39 @@ COLUMN_MAPPING = {
 # --- HELPER FUNCTIONS ---
 @st.cache_data
 def load_master():
-    """Robust loader for Master File."""
+    """
+    Tries to load Master file as Excel, then UTF-8 CSV, then Windows CSV.
+    """
     file_path = "master.xlsx"
     if not os.path.exists(file_path):
         st.error("❌ 'master.xlsx' not found."); st.stop()
         
+    df = None
+    
+    # Attempt 1: Standard Excel
     try:
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
-    except:
-        try:
-            df = pd.read_csv(file_path, dtype=str, sep=None, engine='python')
-        except Exception as e:
-            st.error(f"❌ Could not load Master file. Error: {e}"); st.stop()
-            
+    except Exception as e_xlsx:
+        # Attempt 2: CSV with different encodings
+        encodings = ['utf-8', 'cp1252', 'latin1', 'ISO-8859-1']
+        for enc in encodings:
+            try:
+                # sep=None allows auto-detection of comma vs semicolon
+                df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
+                st.warning(f"⚠️ Note: 'master.xlsx' is actually a CSV file (Encoding: {enc}). I loaded it anyway!")
+                break
+            except Exception:
+                continue
+    
+    if df is None:
+        st.error("❌ FATAL ERROR: Could not load 'master.xlsx' as Excel or CSV.")
+        st.info("Please ensure the file is not corrupted.")
+        st.stop()
+
+    # Clean headers
     df.columns = df.columns.str.strip()
+    
+    # Filter for 'Glasses'
     if "Items type" in df.columns:
         return df[df["Items type"] == "Glasses"]
     else:
@@ -89,7 +108,6 @@ st.subheader("1. Upload File")
 col_upload, col_settings = st.columns([2, 1])
 
 with col_settings:
-    st.info("👇 If columns aren't found, try changing this!")
     header_row_idx = st.number_input("Header Row Number (0 = First Row)", min_value=0, max_value=10, value=0)
 
 with col_upload:
@@ -99,12 +117,10 @@ if uploaded_file:
     user_df = clean_user_file(uploaded_file, header_row=header_row_idx)
     st.info(f"User file loaded: {len(user_df)} rows.")
 
-    # --- DEBUG VIEW: SHOW WHAT WE FOUND ---
+    # --- DEBUG VIEW ---
     with st.expander("🕵️ Debug: Check your Columns", expanded=False):
         st.write("The code sees these columns in your file:")
         st.code(list(user_df.columns))
-        st.write("First 3 rows of data:")
-        st.dataframe(user_df.head(3))
 
     # 4. STRUCTURE CHECK
     missing_master = [col for col in COLUMN_MAPPING.keys() if col not in master_df.columns]
@@ -130,4 +146,4 @@ if uploaded_file:
     st.success("✅ Structure Validated! All columns match.")
     
     if st.button("Start Validation"):
-        st.write("Ready for validation logic...")
+        st.write("Validation logic is next...")
