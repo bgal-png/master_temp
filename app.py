@@ -16,7 +16,7 @@ COLUMN_MAPPING = {
     "Glasses size: lens height": "Glasses size: lens height ID: 71",
     "Glasses size: lens width": "Glasses size: lens width ID: 72",
     "Glasses size: bridge": "Glasses size: bridge ID: 73",
-    "Glasses shape": "Glasses shape ID: 25",             
+    "Glasses shape": "Glasses shape ID: 25",
     "Glasses other info": "Glasses other info ID: 49",
     "Glasses frame type": "Glasses frame type ID: 50",
     "Glasses frame color": "Frame Colour ID: 26",
@@ -47,39 +47,30 @@ COLUMN_MAPPING = {
 # --- HELPER FUNCTIONS ---
 @st.cache_data
 def load_master():
-    """Robust loader that tries Excel first, then various CSV encodings."""
+    """Robust loader that handles encoding issues."""
     file_path = "master.xlsx"
     if not os.path.exists(file_path):
-        st.error("❌ 'master.xlsx' not found in folder."); st.stop()
+        st.error("❌ 'master.xlsx' not found."); st.stop()
         
     df = None
-    
-    # 1. Try Standard Excel
     try:
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
-    except Exception as e_xlsx:
-        # 2. Try CSV with different encodings
-        # 'cp1252' is the standard for Windows Excel CSVs
-        encodings = ['utf-8', 'cp1252', 'latin1', 'ISO-8859-1']
-        errors = []
-        
+    except Exception:
+        # Retry with CSV logic for corrupted/renamed files
+        encodings = ['utf-8', 'cp1252', 'latin1']
         for enc in encodings:
             try:
                 df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
-                st.toast(f"⚠️ Loaded master.xlsx as CSV ({enc})", icon="ℹ️")
+                st.toast(f"⚠️ Master file loaded as CSV ({enc})", icon="ℹ️")
                 break
-            except Exception as e:
-                errors.append(f"{enc}: {e}")
+            except Exception:
                 continue
     
     if df is None:
-        st.error("❌ FATAL ERROR: Could not load 'master.xlsx'.")
-        st.write("Debug Details:")
-        st.write(errors)
-        st.stop()
+        st.error("❌ FATAL ERROR: Could not load Master file."); st.stop()
             
-    # Clean headers
-    df.columns = df.columns.str.strip()
+    # Clean headers (Flatten newlines)
+    df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.strip()
     
     if "Items type" in df.columns:
         return df[df["Items type"] == "Glasses"]
@@ -93,7 +84,10 @@ def clean_user_file(file, header_row=0):
         file.seek(0)
         df = pd.read_csv(file, dtype=str, sep=None, engine='python', header=header_row)
     
-    df.columns = df.columns.astype(str).str.strip()
+    # --- MAGIC FIX: REPLACE NEWLINES WITH SPACE ---
+    # This turns "Glasses type\nID: 13" into "Glasses type ID: 13"
+    df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.strip()
+    
     return df
 
 # 2. LOAD MASTER
@@ -130,10 +124,9 @@ if uploaded_file:
         mistakes = []
         st.write("Checking data... please wait.")
         
-        # Prepare Master Sets (Case Insensitive)
+        # Prepare Master Sets (Lowercase for flexible matching)
         valid_values = {}
         for master_col in COLUMN_MAPPING.keys():
-            # Get all valid options, strip whitespace, convert to lowercase
             valid_set = set(master_df[master_col].dropna().astype(str).str.strip().str.lower())
             valid_values[master_col] = valid_set
 
@@ -158,7 +151,7 @@ if uploaded_file:
                         "Row #": index + 2 + header_row_idx,
                         "Column": user_col,
                         "Invalid Value": cell_value,
-                        "Expected Options (Example)": list(valid_values[master_col])[:3] # Show first 3 valid options
+                        "Allowed Options (Example)": list(valid_values[master_col])[:3]
                     })
 
         progress_bar.empty()
