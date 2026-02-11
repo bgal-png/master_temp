@@ -9,7 +9,7 @@ st.title("Excel Validator: Glasses Edition 👓")
 
 # --- COLUMN MAPPING CONFIGURATION ---
 COLUMN_MAPPING = {
-    "Glasses type": "Glasses type ID: 13",
+    "Glasses type": "Glasses type  ID: 13",       # <--- FIXED (Double Space)
     "Manufacturer": "Manufacturer ID: 9",
     "Glasses size: glasses width": "Glasses size: glasses width ID: 69",
     "Glasses size: temple length": "Glasses size: temple length ID: 70",
@@ -48,24 +48,23 @@ COLUMN_MAPPING = {
 @st.cache_data
 def load_master():
     """
-    Smart Loader: Scans the folder for ANY Excel/CSV file and tries to load it.
+    Smart Loader: Scans folder for ANY Excel/CSV file.
     """
     # 1. SCAN FOLDER
     current_dir = os.getcwd()
     all_files = os.listdir(current_dir)
     
-    # Filter for candidates (exclude system files)
+    # Filter for candidates
     candidates = [
         f for f in all_files 
         if (f.endswith('.xlsx') or f.endswith('.csv')) 
         and "mistakes" not in f 
         and "validation_errors" not in f
-        and not f.startswith('~$') # Exclude temporary Excel lock files
+        and not f.startswith('~$')
     ]
     
     if not candidates:
         st.error(f"❌ No Excel or CSV files found in: {current_dir}")
-        st.write("Files I see: ", all_files)
         st.stop()
         
     # Pick the first one found
@@ -77,7 +76,6 @@ def load_master():
     # 2. LOAD IT
     try:
         if file_path.endswith('.csv'):
-             # Try different encodings for CSV
             for enc in ['utf-8', 'cp1252', 'latin1']:
                 try:
                     df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
@@ -85,7 +83,6 @@ def load_master():
                 except:
                     continue
         else:
-            # Try standard Excel
             df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
             
     except Exception as e:
@@ -97,13 +94,13 @@ def load_master():
         st.stop()
 
     # 3. CLEAN & FILTER
-    # Flatten newlines and strip whitespace
+    # Flatten newlines
     df.columns = df.columns.astype(str).str.replace(r'\n', ' ', regex=True).str.strip()
     
     if "Items type" in df.columns:
         return df[df["Items type"] == "Glasses"]
     else:
-        st.error(f"❌ Loaded '{file_path}' but couldn't find 'Items type' column. Headers found: {list(df.columns)}")
+        st.error(f"❌ Loaded '{file_path}' but couldn't find 'Items type'. Headers: {list(df.columns)}")
         st.stop()
 
 def clean_user_file(file, header_row=0):
@@ -113,7 +110,7 @@ def clean_user_file(file, header_row=0):
         file.seek(0)
         df = pd.read_csv(file, dtype=str, sep=None, engine='python', header=header_row)
     
-    # Flatten newlines and strip whitespace
+    # Flatten newlines (Replace \n with space)
     df.columns = df.columns.astype(str).str.replace(r'\n', ' ', regex=True).str.strip()
     return df
 
