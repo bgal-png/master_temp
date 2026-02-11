@@ -48,55 +48,65 @@ COLUMN_MAPPING = {
 @st.cache_data
 def load_master():
     """
-    Robust Loader: Targets 'master_clean.xlsx' first.
+    Smart Loader: Scans the folder for ANY Excel/CSV file and tries to load it.
     """
-    # UPDATED FILENAME HERE
-    file_path = "master_clean.xlsx"
+    # 1. SCAN FOLDER
+    current_dir = os.getcwd()
+    all_files = os.listdir(current_dir)
     
-    if not os.path.exists(file_path):
-        st.error(f"❌ '{file_path}' NOT FOUND in the directory.")
+    # Filter for candidates (exclude system files)
+    candidates = [
+        f for f in all_files 
+        if (f.endswith('.xlsx') or f.endswith('.csv')) 
+        and "mistakes" not in f 
+        and "validation_errors" not in f
+        and not f.startswith('~$') # Exclude temporary Excel lock files
+    ]
+    
+    if not candidates:
+        st.error(f"❌ No Excel or CSV files found in: {current_dir}")
+        st.write("Files I see: ", all_files)
         st.stop()
         
+    # Pick the first one found
+    file_path = candidates[0]
+    st.toast(f"ℹ️ Found Master File: {file_path}")
+
     df = None
-    debug_logs = []
-
-    # Method 1: Standard Excel (openpyxl) - This should work for your new clean file
+    
+    # 2. LOAD IT
     try:
-        df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
+        if file_path.endswith('.csv'):
+             # Try different encodings for CSV
+            for enc in ['utf-8', 'cp1252', 'latin1']:
+                try:
+                    df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
+                    break
+                except:
+                    continue
+        else:
+            # Try standard Excel
+            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
+            
     except Exception as e:
-        debug_logs.append(f"OpenPyXL failed: {e}")
-
-    # Method 2: Fallbacks (Just in case)
+        st.error(f"❌ Failed to load '{file_path}'. Error: {e}")
+        st.stop()
+        
     if df is None:
-        try:
-            df = pd.read_excel(file_path, dtype=str, engine='xlrd')
-        except Exception:
-            try:
-                df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding='utf-8')
-            except Exception:
-                pass
-
-    # --- FINAL CHECK ---
-    if df is None:
-        st.error("❌ FATAL ERROR: Could not load the Master file.")
-        with st.expander("👀 View Technical Errors"):
-            for log in debug_logs:
-                st.write(log)
+        st.error(f"❌ Could not read '{file_path}' with any method.")
         st.stop()
 
-    # --- CLEANING ---
-    # Flatten newlines (Replace \n with space) and strip whitespace
+    # 3. CLEAN & FILTER
+    # Flatten newlines and strip whitespace
     df.columns = df.columns.astype(str).str.replace(r'\n', ' ', regex=True).str.strip()
     
-    # Filter for 'Glasses' (Column V / Items type)
     if "Items type" in df.columns:
         return df[df["Items type"] == "Glasses"]
     else:
-        st.error(f"❌ Loaded file but could not find 'Items type'. Found: {list(df.columns)}")
+        st.error(f"❌ Loaded '{file_path}' but couldn't find 'Items type' column. Headers found: {list(df.columns)}")
         st.stop()
 
 def clean_user_file(file, header_row=0):
-    """Loads user file and cleans headers."""
     try:
         df = pd.read_excel(file, dtype=str, header=header_row)
     except:
