@@ -47,47 +47,81 @@ COLUMN_MAPPING = {
 # --- HELPER FUNCTIONS ---
 @st.cache_data
 def load_master():
-    """Robust loader that handles encoding issues."""
+    """
+    Indestructible Loader: Tries every possible method to read the file.
+    """
     file_path = "master.xlsx"
     if not os.path.exists(file_path):
-        st.error("❌ 'master.xlsx' not found."); st.stop()
+        st.error("❌ 'master.xlsx' NOT FOUND in the directory.")
+        st.stop()
         
     df = None
+    debug_logs = []
+
+    # Method 1: Standard Excel (openpyxl)
     try:
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
-    except Exception:
-        # Retry with CSV logic for corrupted/renamed files
-        encodings = ['utf-8', 'cp1252', 'latin1']
-        for enc in encodings:
-            try:
-                df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
-                st.toast(f"⚠️ Master file loaded as CSV ({enc})", icon="ℹ️")
-                break
-            except Exception:
-                continue
-    
+    except Exception as e:
+        debug_logs.append(f"OpenPyXL failed: {e}")
+
+    # Method 2: Old Excel (xlrd - for .xls renamed as .xlsx)
     if df is None:
-        st.error("❌ FATAL ERROR: Could not load Master file."); st.stop()
-            
-    # Clean headers (Flatten newlines)
-    df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.strip()
+        try:
+            df = pd.read_excel(file_path, dtype=str, engine='xlrd')
+        except Exception as e:
+            debug_logs.append(f"XLRD failed: {e}")
+
+    # Method 3: CSV (UTF-8)
+    if df is None:
+        try:
+            df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding='utf-8')
+        except Exception as e:
+            debug_logs.append(f"CSV (UTF-8) failed: {e}")
+
+    # Method 4: CSV (Windows-1252 / Latin1)
+    if df is None:
+        try:
+            df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding='cp1252')
+        except Exception as e:
+            debug_logs.append(f"CSV (CP1252) failed: {e}")
+
+    # Method 5: CSV (ISO-8859-1)
+    if df is None:
+        try:
+            df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding='iso-8859-1')
+        except Exception as e:
+            debug_logs.append(f"CSV (ISO) failed: {e}")
+
+    # --- FINAL CHECK ---
+    if df is None:
+        st.error("❌ FATAL ERROR: All loading methods failed.")
+        with st.expander("👀 View Technical Errors"):
+            for log in debug_logs:
+                st.write(log)
+        st.stop()
+
+    # --- CLEANING ---
+    # 1. Strip whitespace from headers
+    # 2. Flatten newlines (Replace \n with space)
+    df.columns = df.columns.astype(str).str.replace(r'\n', ' ', regex=True).str.strip()
     
+    # Filter for 'Glasses' (Column V / Items type)
     if "Items type" in df.columns:
         return df[df["Items type"] == "Glasses"]
     else:
-        st.error("❌ 'Items type' column missing in Master."); st.stop()
+        st.error(f"❌ Loaded file but could not find 'Items type'. Found: {list(df.columns)}")
+        st.stop()
 
 def clean_user_file(file, header_row=0):
+    """Loads user file and cleans headers."""
     try:
         df = pd.read_excel(file, dtype=str, header=header_row)
     except:
         file.seek(0)
         df = pd.read_csv(file, dtype=str, sep=None, engine='python', header=header_row)
     
-    # --- MAGIC FIX: REPLACE NEWLINES WITH SPACE ---
-    # This turns "Glasses type\nID: 13" into "Glasses type ID: 13"
-    df.columns = df.columns.astype(str).str.replace('\n', ' ', regex=False).str.strip()
-    
+    # Flatten newlines and strip whitespace
+    df.columns = df.columns.astype(str).str.replace(r'\n', ' ', regex=True).str.strip()
     return df
 
 # 2. LOAD MASTER
@@ -124,7 +158,7 @@ if uploaded_file:
         mistakes = []
         st.write("Checking data... please wait.")
         
-        # Prepare Master Sets (Lowercase for flexible matching)
+        # Prepare Master Sets (Case Insensitive)
         valid_values = {}
         for master_col in COLUMN_MAPPING.keys():
             valid_set = set(master_df[master_col].dropna().astype(str).str.strip().str.lower())
