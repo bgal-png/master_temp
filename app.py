@@ -8,8 +8,6 @@ st.set_page_config(page_title="Excel Validator v2", layout="wide")
 st.title("Excel Validator: Glasses Edition 👓")
 
 # --- COLUMN MAPPING CONFIGURATION ---
-# Key = Master File Column Name (Corrected)
-# Value = User File Column Name
 COLUMN_MAPPING = {
     "Glasses type": "Glasses type",
     "Manufacturer": "Manufacturer",
@@ -24,7 +22,7 @@ COLUMN_MAPPING = {
     "Glasses frame color": "Frame Colour",
     "Glasses temple color": "Temple Colour",
     "Glasses main material": "Glasses main material",
-    "Glasses lens color": "Glasses lens Colour",          # <--- FIXED
+    "Glasses lens color": "Glasses lens Colour",
     "Glasses lens material": "Glasses lens material",
     "Glasses lens effect": "Glasses lens effect",
     "Sunglasses filter": "Sunglasses filter",
@@ -35,11 +33,11 @@ COLUMN_MAPPING = {
     "Items type": "Items type",
     "Items packing": "Items packing",
     "Glasses contain": "Glasses contain",
-    "Sport glasses": "Sports Glasses",                    # <--- FIXED
+    "Sport glasses": "Sports Glasses",
     "Glasses frame color effect": "Glasses frame color effect",
     "Glasses other features": "Glasses other features",
     "SunGlasses RX lenses": "SunGlasses RX lenses",
-    "Glasses clip-on lens color": "Glasses clip-on lens colour", # <--- FIXED
+    "Glasses clip-on lens color": "Glasses clip-on lens colour",
     "Brand": "Brand",
     "Producing company": "Producing company",
     "Glasses for your face shape": "Glasses for your face shape",
@@ -49,108 +47,87 @@ COLUMN_MAPPING = {
 # --- HELPER FUNCTIONS ---
 @st.cache_data
 def load_master():
-    """
-    Robust loader that handles XLSX, CSV, and renamed files.
-    """
+    """Robust loader for Master File."""
     file_path = "master.xlsx"
-    
-    # 1. Check if file exists and isn't empty
     if not os.path.exists(file_path):
-        st.error("❌ 'master.xlsx' was not found in the GitHub folder.")
-        st.stop()
+        st.error("❌ 'master.xlsx' not found."); st.stop()
         
-    if os.path.getsize(file_path) == 0:
-        st.error("❌ 'master.xlsx' exists but is empty (0 bytes). Please re-upload it.")
-        st.stop()
-
-    df = None
-    
-    # 2. Try loading as Excel (Standard)
     try:
-        # engine='openpyxl' helps with compatibility
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
-    except Exception as e_excel:
-        # 3. If that fails, try loading as CSV (Backup)
+    except:
         try:
-            # engine='python' allows auto-detection of separators
             df = pd.read_csv(file_path, dtype=str, sep=None, engine='python')
-            st.warning("⚠️ Note: 'master.xlsx' appears to be a CSV file, not a real Excel file. I loaded it anyway!")
-        except Exception as e_csv:
-            st.error("❌ FATAL ERROR: Could not load the file as Excel OR CSV.")
-            st.write(f"Excel Error: {e_excel}")
-            st.write(f"CSV Error: {e_csv}")
-            st.stop()
+        except Exception as e:
+            st.error(f"❌ Could not load Master file. Error: {e}"); st.stop()
             
-    # 4. Clean and Filter
-    # Clean headers (strip hidden spaces)
     df.columns = df.columns.str.strip()
-    
-    # Filter for 'Glasses' only (Column V in Excel, 'Items type' here)
     if "Items type" in df.columns:
-        df = df[df["Items type"] == "Glasses"]
-        return df
+        return df[df["Items type"] == "Glasses"]
     else:
-        st.error("❌ Critical Error: 'Items type' column not found in Master File.")
-        st.stop()
+        st.error("❌ 'Items type' column missing in Master."); st.stop()
 
-def clean_user_file(file):
+def clean_user_file(file, header_row=0):
+    """Loads user file with specific header row."""
     try:
-        df = pd.read_excel(file, dtype=str)
+        df = pd.read_excel(file, dtype=str, header=header_row)
     except:
         file.seek(0)
-        df = pd.read_csv(file, dtype=str, sep=None, engine='python')
-        
-    df.columns = df.columns.str.strip()
+        df = pd.read_csv(file, dtype=str, sep=None, engine='python', header=header_row)
+    
+    # Clean headers: Convert to string and strip whitespace
+    df.columns = df.columns.astype(str).str.strip()
     return df
 
-# 2. LOAD MASTER DATA
+# 2. LOAD MASTER
 master_df = load_master()
-st.success(f"✅ Master File Loaded Successfully ({len(master_df)} rows of 'Glasses').")
+st.success(f"✅ Master File Loaded ({len(master_df)} rows).")
 
-# 3. UPLOAD USER FILE
+# 3. UPLOAD SECTION
 st.divider()
-st.subheader("1. Upload File to Validate")
-uploaded_file = st.file_uploader("Choose Excel File", type=['xlsx'])
+st.subheader("1. Upload File")
+
+col_upload, col_settings = st.columns([2, 1])
+
+with col_settings:
+    st.info("👇 If columns aren't found, try changing this!")
+    header_row_idx = st.number_input("Header Row Number (0 = First Row)", min_value=0, max_value=10, value=0)
+
+with col_upload:
+    uploaded_file = st.file_uploader("Choose Excel File", type=['xlsx'])
 
 if uploaded_file:
-    user_df = clean_user_file(uploaded_file)
+    user_df = clean_user_file(uploaded_file, header_row=header_row_idx)
     st.info(f"User file loaded: {len(user_df)} rows.")
 
-    # 4. STRUCTURE CHECK (Sanity Check)
-    missing_master = []
-    missing_user = []
+    # --- DEBUG VIEW: SHOW WHAT WE FOUND ---
+    with st.expander("🕵️ Debug: Check your Columns", expanded=False):
+        st.write("The code sees these columns in your file:")
+        st.code(list(user_df.columns))
+        st.write("First 3 rows of data:")
+        st.dataframe(user_df.head(3))
 
-    for master_col, user_col in COLUMN_MAPPING.items():
-        if master_col not in master_df.columns:
-            missing_master.append(master_col)
-        if user_col not in user_df.columns:
-            missing_user.append(user_col)
-    
-    # --- DETECTIVE MODE ---
+    # 4. STRUCTURE CHECK
+    missing_master = [col for col in COLUMN_MAPPING.keys() if col not in master_df.columns]
+    missing_user = [col for col in COLUMN_MAPPING.values() if col not in user_df.columns]
+
     if missing_master:
-        st.error(f"❌ CRITICAL: The Master File is missing these columns:")
-        st.write(missing_master)
-        
-        st.divider()
-        st.warning("🕵️ DETECTIVE: Let's find the correct names!")
-        
-        all_master_cols = list(master_df.columns)
-        
-        for missing in missing_master:
-            # Find the closest matching name in the actual file
-            matches = get_close_matches(missing, all_master_cols, n=3, cutoff=0.6)
-            if matches:
-                st.write(f"**For '{missing}', did you mean:**")
-                for match in matches:
-                    st.code(match)
+        st.error(f"❌ CRITICAL: Master File is missing: {missing_master}")
         st.stop()
         
     if missing_user:
-        st.error(f"❌ CRITICAL: Your Uploaded File is missing these columns: {missing_user}")
+        st.error(f"❌ CRITICAL: Your Uploaded File is missing columns!")
+        st.write("We are looking for these exact names:", missing_user)
+        
+        # Detective Work
+        st.warning("🕵️ Let's see what we found instead...")
+        all_user_cols = list(user_df.columns)
+        for missing in missing_user:
+            matches = get_close_matches(missing, all_user_cols, n=1, cutoff=0.6)
+            if matches:
+                st.write(f"For '{missing}', did you have '{matches[0]}'?")
         st.stop()
         
-    st.success("✅ Structure Validated! All required columns exist in both files.")
+    st.success("✅ Structure Validated! All columns match.")
     
-    # Placeholder for validation logic
     if st.button("Start Validation"):
-        st.write("Validation logic is ready to be added next...")
+        st.write("Ready for validation logic...")
