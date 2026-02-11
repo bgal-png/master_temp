@@ -8,8 +8,6 @@ st.set_page_config(page_title="Excel Validator v2", layout="wide")
 st.title("Excel Validator: Glasses Edition 👓")
 
 # --- COLUMN MAPPING CONFIGURATION ---
-# Key = Master File Column Name (The Source of Truth)
-# Value = User File Column Name (The Column to Check)
 COLUMN_MAPPING = {
     "Glasses type": "Glasses type ID: 13",
     "Manufacturer": "Manufacturer ID: 9",
@@ -18,7 +16,7 @@ COLUMN_MAPPING = {
     "Glasses size: lens height": "Glasses size: lens height ID: 71",
     "Glasses size: lens width": "Glasses size: lens width ID: 72",
     "Glasses size: bridge": "Glasses size: bridge ID: 73",
-    "Glasses shape": "Glasses shape ID: 25",             # <--- UPDATED
+    "Glasses shape": "Glasses shape ID: 25",             
     "Glasses other info": "Glasses other info ID: 49",
     "Glasses frame type": "Glasses frame type ID: 50",
     "Glasses frame color": "Frame Colour ID: 26",
@@ -49,21 +47,38 @@ COLUMN_MAPPING = {
 # --- HELPER FUNCTIONS ---
 @st.cache_data
 def load_master():
-    """Robust loader for Master File."""
+    """Robust loader that tries Excel first, then various CSV encodings."""
     file_path = "master.xlsx"
     if not os.path.exists(file_path):
-        st.error("❌ 'master.xlsx' not found."); st.stop()
+        st.error("❌ 'master.xlsx' not found in folder."); st.stop()
         
     df = None
+    
+    # 1. Try Standard Excel
     try:
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
-    except:
-        try:
-            # Try CSV fallback
-            df = pd.read_csv(file_path, dtype=str, sep=None, engine='python')
-        except Exception:
-            st.error("❌ Could not load Master file."); st.stop()
+    except Exception as e_xlsx:
+        # 2. Try CSV with different encodings
+        # 'cp1252' is the standard for Windows Excel CSVs
+        encodings = ['utf-8', 'cp1252', 'latin1', 'ISO-8859-1']
+        errors = []
+        
+        for enc in encodings:
+            try:
+                df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
+                st.toast(f"⚠️ Loaded master.xlsx as CSV ({enc})", icon="ℹ️")
+                break
+            except Exception as e:
+                errors.append(f"{enc}: {e}")
+                continue
+    
+    if df is None:
+        st.error("❌ FATAL ERROR: Could not load 'master.xlsx'.")
+        st.write("Debug Details:")
+        st.write(errors)
+        st.stop()
             
+    # Clean headers
     df.columns = df.columns.str.strip()
     
     if "Items type" in df.columns:
@@ -112,71 +127,52 @@ if uploaded_file:
 
     # 5. VALIDATION LOGIC
     if st.button("🚀 Run Validation"):
-        
         mistakes = []
         st.write("Checking data... please wait.")
         
-        # Pre-process Master Data into Sets for instant lookup
-        # This makes the check extremely fast (O(1) complexity)
+        # Prepare Master Sets (Case Insensitive)
         valid_values = {}
         for master_col in COLUMN_MAPPING.keys():
-            # Create a set of all valid values for this column
-            # We convert to lowercase to make it case-insensitive if needed, 
-            # but for now we keep it exact or lowercase for comparison.
-            valid_set = set(master_df[master_col].dropna().str.strip().str.lower())
+            # Get all valid options, strip whitespace, convert to lowercase
+            valid_set = set(master_df[master_col].dropna().astype(str).str.strip().str.lower())
             valid_values[master_col] = valid_set
 
         # Progress Bar
         progress_bar = st.progress(0)
-        
-        # Loop through User Rows
         total_rows = len(user_df)
         
         for index, row in user_df.iterrows():
-            # Update progress every 10 rows
             if index % 10 == 0:
                 progress_bar.progress(min(index / total_rows, 1.0))
             
-            # Check every column in the map
             for master_col, user_col in COLUMN_MAPPING.items():
-                
-                # Get the value from user file
                 cell_value = str(row[user_col]).strip()
                 
-                # Ignore empty cells (NaN or empty string)
-                if cell_value.lower() == 'nan' or cell_value == "":
+                # Skip empty cells
+                if cell_value.lower() in ['nan', '', 'none']:
                     continue
                 
-                # CHECK: Is this value in the Master Set?
-                # We check case-insensitive match
+                # Check if value exists in Master (Case Insensitive)
                 if cell_value.lower() not in valid_values[master_col]:
                     mistakes.append({
-                        "Row #": index + 2 + header_row_idx, # Adjust for 0-index and header
+                        "Row #": index + 2 + header_row_idx,
                         "Column": user_col,
                         "Invalid Value": cell_value,
-                        "Expected From": master_col
+                        "Expected Options (Example)": list(valid_values[master_col])[:3] # Show first 3 valid options
                     })
 
         progress_bar.empty()
 
-        # 6. OUTPUT REPORT
         if mistakes:
             st.error(f"Found {len(mistakes)} Invalid Values!")
-            
             results_df = pd.DataFrame(mistakes)
             st.dataframe(results_df, use_container_width=True)
             
-            # Download Button
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                results_df.to_excel(writer, index=False, sheet_name='Errors')
+                results_df.to_excel(writer, index=False)
                 
-            st.download_button(
-                label="📥 Download Error Report",
-                data=buffer,
-                file_name="validation_errors.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            st.download_button("📥 Download Error Report", buffer, "validation_errors.xlsx")
         else:
             st.balloons()
-            st.success("✅ Amazing! No invalid values found. All data matches the Master File options.")
+            st.success("✅ Amazing! No invalid values found.")
