@@ -3,14 +3,16 @@ import pandas as pd
 import os
 import io
 import re
+from difflib import get_close_matches
 
 # 1. Page Configuration
 st.set_page_config(page_title="Excel Validator v2", layout="wide")
 st.title("Excel Validator: Glasses Edition 👓")
 
 # --- COLUMN MAPPING CONFIGURATION ---
-# We use SINGLE SPACES here because the code below will auto-fix the user file to match this.
-COLUMN_MAPPING = {
+# These are the "Ideal" names we want to find.
+# The code will now search for the BEST match in your file for each of these.
+TARGET_COLUMNS = {
     "Glasses type": "Glasses type ID: 13",
     "Manufacturer": "Manufacturer ID: 9",
     "Glasses size: glasses width": "Glasses size: glasses width ID: 69",
@@ -47,14 +49,15 @@ COLUMN_MAPPING = {
 }
 
 # --- HELPER: NORMALIZE HEADERS ---
-def normalize_headers(df):
+def normalize_text(text):
     """
-    Magic Function: Replaces newlines, tabs, and multiple spaces 
-    with a single clean space.
+    Aggressive cleaner: removes all non-alphanumeric characters (except :) 
+    and lowercases everything to find a match.
     """
-    # Regex '\s+' means "one or more whitespace characters"
-    df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
-    return df
+    if not isinstance(text, str): return str(text)
+    # Replace newlines/tabs with space
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
 @st.cache_data
 def load_master():
@@ -80,13 +83,16 @@ def load_master():
         
     if df is None: st.error("❌ Could not read file."); st.stop()
 
-    # Apply Normalization
-    df = normalize_headers(df)
+    # Normalization
+    df.columns = [normalize_text(c) for c in df.columns]
     
-    if "Items type" in df.columns:
-        return df[df["Items type"] == "Glasses"]
+    # Check for 'Items type'
+    # We use fuzzy matching even for the Master file
+    matches = get_close_matches("Items type", df.columns, n=1, cutoff=0.6)
+    if matches:
+        return df[df[matches[0]] == "Glasses"]
     else:
-        st.error(f"❌ 'Items type' missing. Found: {list(df.columns)}"); st.stop()
+        st.error(f"❌ 'Items type' missing in Master. Found: {list(df.columns)}"); st.stop()
 
 def clean_user_file(file, header_row=0):
     try:
@@ -95,8 +101,8 @@ def clean_user_file(file, header_row=0):
         file.seek(0)
         df = pd.read_csv(file, dtype=str, sep=None, engine='python', header=header_row)
     
-    # Apply Normalization
-    df = normalize_headers(df)
+    # Normalize Headers
+    df.columns = [normalize_text(c) for c in df.columns]
     return df
 
 # 2. LOAD MASTER
@@ -117,23 +123,44 @@ if uploaded_file:
     user_df = clean_user_file(uploaded_file, header_row=header_row_idx)
     st.info(f"User file loaded: {len(user_df)} rows.")
 
-    # 4. STRUCTURE CHECK
-    missing_master = [col for col in COLUMN_MAPPING.keys() if col not in master_df.columns]
-    missing_user = [col for col in COLUMN_MAPPING.values() if col not in user_df.columns]
-
-    if missing_master:
-        st.error(f"❌ CRITICAL: Master File is missing: {missing_master}")
-        st.stop()
-    if missing_user:
-        st.error(f"❌ CRITICAL: User File is missing: {missing_user}")
+    # 4. SMART MAPPING (The Fix)
+    # We dynamically build the map based on what we find in the file
+    final_map = {}
+    missing_cols = []
+    
+    user_cols = list(user_df.columns)
+    
+    st.write("---")
+    st.subheader("🔍 Column Matching Report")
+    
+    # Loop through our "Wishlist" of columns
+    for master_name, ideal_user_name in TARGET_COLUMNS.items():
         
-        # DEBUG: Show user exactly what the code sees
-        with st.expander("🕵️ Debug: What headers do I see?"):
-            st.write("I normalized your headers to this:")
-            st.code(list(user_df.columns))
+        # 1. Try Exact Match (Normalized)
+        if ideal_user_name in user_cols:
+            final_map[master_name] = ideal_user_name
+            continue
+            
+        # 2. Try Fuzzy Match (Is there something very similar?)
+        # cutoff=0.6 means "60% similar"
+        matches = get_close_matches(ideal_user_name, user_cols, n=1, cutoff=0.6)
+        
+        if matches:
+            found_col = matches[0]
+            final_map[master_name] = found_col
+            # Optional: Show what we found
+            # st.caption(f"✅ Mapped '{ideal_user_name}' -> '{found_col}'")
+        else:
+            missing_cols.append(ideal_user_name)
+
+    # CHECK FOR CRITICAL MISSING COLUMNS
+    if missing_cols:
+        st.error(f"❌ CRITICAL: Could not find these columns (even with fuzzy search):")
+        st.write(missing_cols)
+        st.write("Available columns in your file:", user_cols)
         st.stop()
 
-    st.success("✅ Structure Validated!")
+    st.success(f"✅ All {len(final_map)} columns mapped successfully!")
 
     # 5. VALIDATION LOGIC
     if st.button("🚀 Run Validation"):
@@ -141,9 +168,18 @@ if uploaded_file:
         st.write("Checking data... please wait.")
         
         valid_values = {}
-        for master_col in COLUMN_MAPPING.keys():
-            valid_set = set(master_df[master_col].dropna().astype(str).str.strip().str.lower())
-            valid_values[master_col] = valid_set
+        # Pre-load Master Values (using fuzzy matched column names if needed)
+        master_cols = list(master_df.columns)
+        
+        for master_key in final_map.keys():
+            # Find the actual column name in Master
+            match = get_close_matches(master_key, master_cols, n=1, cutoff=0.6)
+            if match:
+                real_master_col = match[0]
+                valid_set = set(master_df[real_master_col].dropna().astype(str).str.strip().str.lower())
+                valid_values[master_key] = valid_set
+            else:
+                st.error(f"Could not find '{master_key}' in Master File"); st.stop()
 
         progress_bar = st.progress(0)
         total_rows = len(user_df)
@@ -151,16 +187,17 @@ if uploaded_file:
         for index, row in user_df.iterrows():
             if index % 10 == 0: progress_bar.progress(min(index / total_rows, 1.0))
             
-            for master_col, user_col in COLUMN_MAPPING.items():
-                cell_value = str(row[user_col]).strip()
+            for master_key, user_col_name in final_map.items():
+                cell_value = str(row[user_col_name]).strip()
                 if cell_value.lower() in ['nan', '', 'none']: continue
                 
-                if cell_value.lower() not in valid_values[master_col]:
+                # Validation
+                if cell_value.lower() not in valid_values[master_key]:
                     mistakes.append({
                         "Row #": index + 2 + header_row_idx,
-                        "Column": user_col,
+                        "Column": user_col_name,
                         "Invalid Value": cell_value,
-                        "Allowed Options (Example)": list(valid_values[master_col])[:3]
+                        "Allowed Options (Example)": list(valid_values[master_key])[:3]
                     })
 
         progress_bar.empty()
