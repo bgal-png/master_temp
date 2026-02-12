@@ -9,6 +9,7 @@ st.title("Excel Validator: Glasses Edition 👓")
 
 # ==========================================
 # 🔒 LOCKED SECTION: MASTER LOADER
+# RESTORED: "The Version That Works So Great"
 # ==========================================
 @st.cache_data
 def load_master():
@@ -60,8 +61,10 @@ def load_master():
         st.error(f"❌ Could not read '{file_path}'. Tried Excel and all CSV formats.")
         st.stop()
 
+    # Clean headers
     df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
     
+    # Filter for 'Glasses'
     target_col = next((c for c in df.columns if "Items type" in c), None)
     if target_col:
         return df[df[target_col] == "Glasses"]
@@ -227,13 +230,21 @@ if uploaded_file:
         st.info("Paste your file paths below. I will clean them (remove folders, convert '_' to '/') and match them against Column A.")
 
         # 1. Get Excel Names (Try to find 'Glasses name', else take Column A)
-        excel_name_col = next((c for c in user_df.columns if "Glasses name" in c), user_df.columns[0])
-        excel_names_raw = user_df[excel_name_col].dropna().astype(str).tolist()
+        # Note: If your column is literally named "Glasses name", this works.
+        # If it's the FIRST column (Column A), user_df.columns[0] grabs it.
+        target_col_name = "Glasses name" # Search priority
         
-        # Clean Excel Names (Standardize for comparison)
+        # Try to find closest match to 'Glasses name', otherwise default to Column 0
+        found_col = next((c for c in user_df.columns if target_col_name.lower() in c.lower()), user_df.columns[0])
+        
+        st.write(f"📂 **Using Excel Column:** `{found_col}`")
+        
+        # Load names from that column
+        excel_names_raw = user_df[found_col].dropna().astype(str).tolist()
+        # Clean: trim spaces and lowercase
         excel_names_set = set(n.strip().lower() for n in excel_names_raw if n.strip())
         
-        st.write(f"📂 **Excel Column Used:** `{excel_name_col}` ({len(excel_names_set)} unique names)")
+        st.write(f"Found {len(excel_names_set)} unique names in Excel.")
 
         # 2. Paste Area
         pasted_paths = st.text_area("Paste File Paths Here (one per line)", height=300)
@@ -242,10 +253,11 @@ if uploaded_file:
             if not pasted_paths.strip():
                 st.warning("Please paste some paths first!")
             else:
-                image_report = []
                 # Process Paths
                 pasted_lines = pasted_paths.split('\n')
                 found_images_set = set()
+                
+                debug_log = [] # To verify what the code sees
                 
                 for line in pasted_lines:
                     if not line.strip(): continue
@@ -264,7 +276,8 @@ if uploaded_file:
                     # 3. Replace '_' with '/'
                     clean_name = clean_name.replace('_', '/')
                     
-                    found_images_set.add(clean_name.strip().lower())
+                    final_name = clean_name.strip().lower()
+                    found_images_set.add(final_name)
 
                 # COMPARISON
                 missing_in_images = [n for n in excel_names_set if n not in found_images_set]
@@ -275,16 +288,16 @@ if uploaded_file:
                 
                 with col_miss:
                     st.error(f"❌ Missing Images ({len(missing_in_images)})")
-                    st.caption("These names are in Excel but you didn't paste an image for them.")
+                    st.caption("Names in Excel that have NO matching image.")
                     if missing_in_images:
-                        st.dataframe(pd.DataFrame(missing_in_images, columns=["Missing Names"]), use_container_width=True)
+                        st.dataframe(pd.DataFrame(missing_in_images, columns=["Missing Name"]), use_container_width=True)
                     else:
                         st.success("All Excel items have an image!")
 
                 with col_extra:
                     st.warning(f"⚠️ Extra Images ({len(extra_in_images)})")
-                    st.caption("These images were pasted but don't match any name in Excel.")
+                    st.caption("Images you pasted that don't match any name in Excel.")
                     if extra_in_images:
-                        st.dataframe(pd.DataFrame(extra_in_images, columns=["Orphaned Images"]), use_container_width=True)
+                        st.dataframe(pd.DataFrame(extra_in_images, columns=["Orphaned Image"]), use_container_width=True)
                     else:
                         st.success("No extra images found.")
