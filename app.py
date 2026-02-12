@@ -7,11 +7,18 @@ import io
 st.set_page_config(page_title="Excel Validator v2", layout="wide")
 st.title("Excel Validator: Glasses Edition 👓")
 
-# --- HELPER: INDESTRUCTIBLE LOADER ---
+# ==========================================
+# 🔒 LOCKED SECTION: MASTER LOADER
+# DO NOT MODIFY THIS FUNCTION.
+# It handles "Fake" Excel files (CSVs named .xlsx)
+# ==========================================
 @st.cache_data
 def load_master():
     """
-    Tries to open the file as Excel. If that crashes, forces it open as CSV.
+    INDESTRUCTIBLE LOADER (LOCKED)
+    1. Scans folder for .xlsx or .csv
+    2. Tries to open as Excel.
+    3. If that crashes, forces it open as CSV.
     """
     current_dir = os.getcwd()
     # Find any Excel or CSV file
@@ -28,7 +35,6 @@ def load_master():
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
     except Exception:
         # ATTEMPT 2: CSV (Fallback for "Fake" Excel files)
-        # If Excel fails, we assume it's a CSV named .xlsx
         for enc in ['utf-8', 'cp1252', 'latin1']:
             try:
                 df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
@@ -50,6 +56,9 @@ def load_master():
         return df[df[target_col] == "Glasses"]
     else:
         st.error("❌ 'Items type' column missing in Master File."); st.stop()
+# ==========================================
+# 🔒 END LOCKED SECTION
+# ==========================================
 
 def clean_user_file(file):
     """Loads user file, assumes Header is Row 0."""
@@ -207,7 +216,6 @@ if uploaded_file:
             st.error(f"Found {len(mistakes)} Issues!")
             results_df = pd.DataFrame(mistakes)
             
-            # Use Styler only if available (prevents some display bugs)
             st.dataframe(results_df, use_container_width=True)
             
             buffer = io.BytesIO()
