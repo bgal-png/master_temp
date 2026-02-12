@@ -5,7 +5,7 @@ import io
 
 # 1. Page Configuration
 st.set_page_config(page_title="Excel Validator v2", layout="wide")
-st.title("Excel Validator: Glasses Edition 👓")
+st.title("Glasses Import Validator 😎")
 
 # ==========================================
 # 🔒 LOCKED: MAIN MASTER LOADER (Tab 1)
