@@ -2,92 +2,142 @@ import streamlit as st
 import pandas as pd
 import os
 import io
+import re
 
 # 1. Page Configuration
 st.set_page_config(page_title="Excel Validator v2", layout="wide")
 st.title("Excel Validator: Glasses Edition 👓")
 
 # ==========================================
-# 🔒 LOCKED SECTION: MASTER LOADER
+# 🔒 LOCKED: MAIN MASTER LOADER (Tab 1)
 # ==========================================
 @st.cache_data
 def load_master():
-    """
-    TRULY INDESTRUCTIBLE LOADER
-    1. Tries Excel (.xlsx)
-    2. If that fails (Zip Error), tries CSV with Auto-Separator.
-    3. If that fails, tries CSV with comma/semicolon explicitly.
-    """
+    """TRULY INDESTRUCTIBLE LOADER for Main Data"""
     current_dir = os.getcwd()
-    candidates = [f for f in os.listdir(current_dir) if (f.endswith('.xlsx') or f.endswith('.csv')) and "mistakes" not in f and not f.startswith('~$')]
+    # Exclude the name master from this search to avoid confusion
+    candidates = [f for f in os.listdir(current_dir) if (f.endswith('.xlsx') or f.endswith('.csv')) and "mistakes" not in f and "name_master" not in f and not f.startswith('~$')]
     
     if not candidates:
-        st.error("❌ No Master File found!"); st.stop()
+        st.error("❌ No Main Master File found!"); st.stop()
     
     file_path = candidates[0]
     df = None
     
-    # ATTEMPT 1: EXCEL (Standard)
+    # ATTEMPT 1: EXCEL
     try:
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
     except Exception:
-        # ATTEMPT 2: CSV (Fallback loop)
-        strategies = [
-            {'sep': None, 'engine': 'python'}, # Auto-detect
-            {'sep': ',', 'engine': 'c'},       # Standard Comma
-            {'sep': ';', 'engine': 'c'},       # Semicolon
-            {'sep': '\t', 'engine': 'c'}       # Tab
-        ]
-        
+        # ATTEMPT 2: CSV
+        strategies = [{'sep': None, 'engine': 'python'}, {'sep': ',', 'engine': 'c'}, {'sep': ';', 'engine': 'c'}, {'sep': '\t', 'engine': 'c'}]
         for enc in ['utf-8', 'cp1252', 'latin1']:
             for strat in strategies:
                 try:
-                    df = pd.read_csv(
-                        file_path, 
-                        dtype=str, 
-                        encoding=enc, 
-                        on_bad_lines='skip', 
-                        **strat
-                    )
-                    st.toast(f"ℹ️ Loaded '{file_path}' as CSV (Encoding: {enc})", icon="⚠️")
+                    df = pd.read_csv(file_path, dtype=str, encoding=enc, on_bad_lines='skip', **strat)
                     break
-                except:
-                    continue
-            if df is not None:
-                break
+                except: continue
+            if df is not None: break
     
-    if df is None:
-        st.error(f"❌ Could not read '{file_path}'. Tried Excel and all CSV formats.")
-        st.stop()
+    if df is None: st.error(f"❌ Could not read '{file_path}'."); st.stop()
 
-    # Clean headers
     df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
-    
-    # Filter for 'Glasses'
     target_col = next((c for c in df.columns if "Items type" in c), None)
-    if target_col:
-        return df[df[target_col] == "Glasses"]
-    else:
-        st.error("❌ 'Items type' column missing in Master File."); st.stop()
-# ==========================================
-# 🔒 END LOCKED SECTION
-# ==========================================
+    if target_col: return df[df[target_col] == "Glasses"]
+    else: st.error("❌ 'Items type' column missing in Master File."); st.stop()
 
-def clean_user_file(file):
+# ==========================================
+# 🔒 LOCKED: NAME MASTER LOADER (Tab 3)
+# ==========================================
+@st.cache_data
+def load_name_master():
+    """
+    Loads 'name_master_clean.xlsx', filters for 'glasses', and gets names.
+    """
+    target_filename = "name_master_clean.xlsx"
+    if not os.path.exists(target_filename):
+        # Fallback: try to find it if name is slightly different
+        candidates = [f for f in os.listdir('.') if "name_master" in f and not f.startswith('~$')]
+        if not candidates:
+            return None # Return None to handle gracefully in UI
+        target_filename = candidates[0]
+
+    df = None
+    # Indestructible Load Logic
     try:
-        df = pd.read_excel(file, dtype=str, header=0)
-    except:
-        file.seek(0)
-        df = pd.read_csv(file, dtype=str, sep=None, engine='python', header=0)
+        df = pd.read_excel(target_filename, dtype=str, engine='openpyxl')
+    except Exception:
+        strategies = [{'sep': None, 'engine': 'python'}, {'sep': ',', 'engine': 'c'}, {'sep': ';', 'engine': 'c'}]
+        for enc in ['utf-8', 'cp1252', 'latin1']:
+            for strat in strategies:
+                try:
+                    df = pd.read_csv(target_filename, dtype=str, encoding=enc, on_bad_lines='skip', **strat)
+                    break
+                except: continue
+            if df is not None: break
     
+    if df is None: return None
+
+    # Clean Headers
+    df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
+
+    # 1. FILTER: Column 'name_private' (AL) must contain "glasses"
+    # Find column that looks like 'name_private'
+    private_col = next((c for c in df.columns if "name_private" in c), None)
+    
+    if not private_col:
+        st.error(f"❌ Column 'name_private' missing in {target_filename}")
+        return None
+        
+    # Filter Logic: contains "glasses" (case insensitive)
+    filtered_df = df[df[private_col].str.contains("glasses", case=False, na=False)]
+    
+    # 2. TARGET: Column 'name' (C)
+    name_col = next((c for c in df.columns if "name" == c or "name" == c.strip()), None)
+    
+    if not name_col:
+         st.error(f"❌ Column 'name' missing in {target_filename}")
+         return None
+         
+    return filtered_df[name_col].dropna().unique().tolist()
+
+# ==========================================
+# 🧠 HELPER FUNCTIONS
+# ==========================================
+def clean_user_file(file):
+    try: df = pd.read_excel(file, dtype=str, header=0)
+    except: file.seek(0); df = pd.read_csv(file, dtype=str, sep=None, engine='python', header=0)
     df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
     return df
 
-# 2. LOAD MASTER
-master_df = load_master()
-st.success(f"✅ Master File Loaded ({len(master_df)} rows).")
+def get_skeleton(text):
+    """
+    Creates a 'Skeleton' of the string to check syntax patterns.
+    Example: "Ray-Ban 3025" -> "Aaa-Aaa 0000"
+    """
+    if not isinstance(text, str): return ""
+    skeleton = ""
+    for char in text:
+        if char.isupper(): skeleton += "A"
+        elif char.islower(): skeleton += "a"
+        elif char.isdigit(): skeleton += "0"
+        else: skeleton += char # Keep symbols/spaces
+    return skeleton
 
-# 3. UPLOAD SECTION
+# ==========================================
+# 🚀 MAIN APP EXECUTION
+# ==========================================
+
+# LOAD DATA
+master_df = load_master() # Tab 1 Data
+name_master_list = load_name_master() # Tab 3 Data
+
+st.success(f"✅ Main Master Loaded ({len(master_df)} rows).")
+if name_master_list:
+    st.success(f"✅ Name Master Loaded ({len(name_master_list)} validated names).")
+else:
+    st.warning("⚠️ 'name_master_clean.xlsx' not found. Tab 3 will be disabled.")
+
+# UPLOAD USER FILE
 st.divider()
 st.subheader("1. Upload User File")
 uploaded_file = st.file_uploader("Choose Excel File", type=['xlsx'])
@@ -96,16 +146,13 @@ if uploaded_file:
     user_df = clean_user_file(uploaded_file)
     st.info(f"User file loaded: {len(user_df)} rows.")
 
-    # ==========================================
-    # 📑 TABS: SEPARATE THE TWO TOOLS
-    # ==========================================
-    tab1, tab2 = st.tabs(["📊 Data Validation", "🖼️ Image Name Checker"])
+    # TABS
+    tab1, tab2, tab3 = st.tabs(["📊 Data Validation", "🖼️ Image Checker", "🧬 Syntax & Duplicates"])
 
     # ------------------------------------------
-    # TAB 1: EXISTING VALIDATION LOGIC
+    # TAB 1: DATA VALIDATION
     # ------------------------------------------
     with tab1:
-        # AUTO-MAPPING
         IDEAL_PAIRS = {
             "Glasses type": "Glasses type ID",
             "Manufacturer": "Manufacturer ID",
@@ -145,146 +192,153 @@ if uploaded_file:
         active_map = {}
         user_cols = list(user_df.columns)
         master_cols = list(master_df.columns)
+        for mk, uk in IDEAL_PAIRS.items():
+            rmc = next((c for c in master_cols if mk in c), None)
+            ruc = next((c for c in user_cols if uk in c), None)
+            if rmc and ruc: active_map[rmc] = ruc
         
-        for master_key, partial_user_key in IDEAL_PAIRS.items():
-            real_master_col = next((c for c in master_cols if master_key in c), None)
-            real_user_col = next((c for c in user_cols if partial_user_key in c), None)
-            
-            if real_master_col and real_user_col:
-                active_map[real_master_col] = real_user_col
-                
-        st.write(f"🔗 Mapped **{len(active_map)}** columns automatically.")
+        st.write(f"🔗 Mapped **{len(active_map)}** columns.")
 
         if st.button("🚀 Run Validation", type="primary"):
             mistakes = []
-            st.write("Checking data... please wait.")
-            
-            # --- A. PREPARE MASTER DATA ---
             valid_values = {}
             for m_col in active_map.keys():
-                raw_series = master_df[m_col].dropna().astype(str)
-                exploded = raw_series.str.split(r',+').explode()
+                raw = master_df[m_col].dropna().astype(str)
+                exploded = raw.str.split(r',+').explode()
                 clean_set = set(exploded.str.strip().str.lower())
                 if "" in clean_set: clean_set.remove("")
                 valid_values[m_col] = clean_set
 
-            # --- B. CHECK USER DATA ---
             progress_bar = st.progress(0)
             total_rows = len(user_df)
-            
-            for index, row in user_df.iterrows():
-                if index % 10 == 0: progress_bar.progress(min(index / total_rows, 1.0))
-                
+            for idx, row in user_df.iterrows():
+                if idx % 10 == 0: progress_bar.progress(min(idx / total_rows, 1.0))
                 for m_col, u_col in active_map.items():
-                    raw_cell_value = str(row[u_col])
-                    if raw_cell_value.lower() in ['nan', '', 'none']: continue
-
-                    # 1. Whitespace
-                    whitespace_issues = []
-                    if raw_cell_value.startswith(" "): whitespace_issues.append("Leading Space")
-                    if raw_cell_value.endswith(" "): whitespace_issues.append("Trailing Space")
-                    if "  " in raw_cell_value: whitespace_issues.append("Double Spaces")
-                    if "| " in raw_cell_value or " |" in raw_cell_value: whitespace_issues.append("Space around Separator")
+                    raw_val = str(row[u_col])
+                    if raw_val.lower() in ['nan', '', 'none']: continue
                     
-                    for issue in whitespace_issues:
-                         mistakes.append({
-                            "Row": index + 2,
-                            "Column": u_col,
-                            "Error Type": "Whitespace Error",
-                            "Invalid Value": issue,
-                            "Full Cell Content": f"'{raw_cell_value}'",
-                            "Allowed": "Clean text"
-                        })
+                    # Whitespace
+                    ws_issues = []
+                    if raw_val.startswith(" "): ws_issues.append("Leading Space")
+                    if raw_val.endswith(" "): ws_issues.append("Trailing Space")
+                    if "  " in raw_val: ws_issues.append("Double Spaces")
+                    if "| " in raw_val or " |" in raw_val: ws_issues.append("Space around Separator")
+                    for ws in ws_issues:
+                        mistakes.append({"Row": idx+2, "Column": u_col, "Error": "Whitespace", "Value": ws, "Content": raw_val})
 
-                    # 2. Content
-                    clean_cell_value = raw_cell_value.strip()
-                    user_values = [v.strip() for v in clean_cell_value.split('|')]
-                    for val in user_values:
-                        if not val: continue
-                        if val.lower() not in valid_values[m_col]:
-                            mistakes.append({
-                                "Row": index + 2,
-                                "Column": u_col,
-                                "Error Type": "Invalid Content",
-                                "Invalid Value": val,
-                                "Full Cell Content": raw_cell_value,
-                                "Allowed": list(valid_values[m_col])[:3]
-                            })
-
+                    # Content
+                    clean_val = raw_val.strip()
+                    parts = [v.strip() for v in clean_val.split('|')]
+                    for p in parts:
+                        if p and p.lower() not in valid_values[m_col]:
+                             mistakes.append({"Row": idx+2, "Column": u_col, "Error": "Invalid Content", "Value": p, "Content": raw_val, "Allowed": list(valid_values[m_col])[:3]})
+            
             progress_bar.empty()
-
             if mistakes:
                 st.error(f"Found {len(mistakes)} Issues!")
-                results_df = pd.DataFrame(mistakes)
-                st.dataframe(results_df, use_container_width=True)
-            else:
-                st.balloons()
-                st.success("✅ Amazing! No invalid values or whitespace errors found.")
+                st.dataframe(pd.DataFrame(mistakes), use_container_width=True)
+            else: st.balloons(); st.success("✅ Clean!")
 
     # ------------------------------------------
-    # TAB 2: NEW IMAGE NAME CHECKER (WITH TOOLTIP)
+    # TAB 2: IMAGE CHECKER
     # ------------------------------------------
     with tab2:
-        # Added the 'help' parameter here for the tooltip
-        st.subheader(
-            "🖼️ Image Name vs. Excel Checker", 
-            help="To get images paths go to the folder containing images -> Select all (Ctrl + A) -> Right click -> Copy as paths"
-        )
+        st.subheader("🖼️ Image Name vs. Excel Checker", help="To get images paths go to the folder containing images -> Select all (Ctrl + A) -> Right click -> Copy as paths")
         
-        st.info("Paste your file paths below. I will clean them (remove folders, convert '_' to '/') and match them against Column A.")
-
-        # 1. Get Excel Names (Try to find 'Glasses name', else take Column A)
         target_col_name = "Glasses name" 
         found_col = next((c for c in user_df.columns if target_col_name.lower() in c.lower()), user_df.columns[0])
-        
         st.write(f"📂 **Using Excel Column:** `{found_col}`")
-        
-        excel_names_raw = user_df[found_col].dropna().astype(str).tolist()
-        excel_names_set = set(n.strip().lower() for n in excel_names_raw if n.strip())
-        
-        st.write(f"Found {len(excel_names_set)} unique names in Excel.")
+        excel_names = set(user_df[found_col].dropna().astype(str).str.strip().str.lower().tolist())
 
-        # 2. Paste Area
-        pasted_paths = st.text_area("Paste File Paths Here (one per line)", height=300)
+        pasted_paths = st.text_area("Paste File Paths Here", height=300)
         
         if st.button("🔍 Check Images"):
-            if not pasted_paths.strip():
-                st.warning("Please paste some paths first!")
+            if not pasted_paths.strip(): st.warning("Paste paths first!")
             else:
-                pasted_lines = pasted_paths.split('\n')
-                found_images_set = set()
-                
-                for line in pasted_lines:
+                lines = pasted_paths.split('\n')
+                found_imgs = set()
+                for line in lines:
                     if not line.strip(): continue
-                    
-                    filename = line.split('\\')[-1] 
-                    if '.' in filename:
-                        clean_name = filename.rsplit('.', 1)[0]
-                    else:
-                        clean_name = filename
-                    
-                    clean_name = clean_name.replace('_', '/')
-                    final_name = clean_name.strip().lower()
-                    found_images_set.add(final_name)
+                    fname = line.split('\\')[-1] 
+                    cname = fname.rsplit('.', 1)[0] if '.' in fname else fname
+                    found_imgs.add(cname.replace('_', '/').strip().lower())
 
-                # COMPARISON
-                missing_in_images = [n for n in excel_names_set if n not in found_images_set]
-                extra_in_images = [n for n in found_images_set if n not in excel_names_set]
+                miss = [n for n in excel_names if n not in found_imgs]
+                extra = [n for n in found_imgs if n not in excel_names]
 
-                col_miss, col_extra = st.columns(2)
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.error(f"❌ Missing ({len(miss)})"); 
+                    if miss: st.dataframe(pd.DataFrame(miss, columns=["Missing"]), use_container_width=True)
+                with c2:
+                    st.warning(f"⚠️ Extra ({len(extra)})"); 
+                    if extra: st.dataframe(pd.DataFrame(extra, columns=["Extra"]), use_container_width=True)
+
+    # ------------------------------------------
+    # TAB 3: SYNTAX & DUPLICATES
+    # ------------------------------------------
+    with tab3:
+        st.subheader("🧬 Syntax & Duplicate Checker")
+        
+        if not name_master_list:
+            st.error("❌ 'name_master_clean.xlsx' was not found. Please upload it to the folder.")
+        else:
+            st.write(f"✅ Comparison Database: **{len(name_master_list)}** valid glasses loaded.")
+            
+            # Find User Name Column
+            user_name_col_idx = next((i for i, c in enumerate(user_df.columns) if "Glasses name" in c), 0)
+            target_user_col = st.selectbox("Select Name Column in User File", user_df.columns, index=user_name_col_idx)
+            
+            if st.button("🧬 Analyze Syntax & Duplicates"):
+                st.write("Analyzing patterns...")
                 
-                with col_miss:
-                    st.error(f"❌ Missing Images ({len(missing_in_images)})")
-                    st.caption("Names in Excel that have NO matching image.")
-                    if missing_in_images:
-                        st.dataframe(pd.DataFrame(missing_in_images, columns=["Missing Name"]), use_container_width=True)
-                    else:
-                        st.success("All Excel items have an image!")
+                # 1. Prepare Knowledge Base
+                # Create Set for instant lookup (Duplicates)
+                valid_names_set = set(n.strip() for n in name_master_list)
+                # Create Set of Skeletons (Syntax)
+                valid_skeletons = set(get_skeleton(n) for n in name_master_list)
+                
+                report = []
+                
+                # 2. Check User Data
+                for idx, name in user_df[target_user_col].dropna().astype(str).items():
+                    clean_name = name.strip()
+                    row_num = idx + 2
+                    
+                    # CHECK A: EXACT DUPLICATE
+                    if clean_name in valid_names_set:
+                        report.append({
+                            "Row": row_num,
+                            "Name": clean_name,
+                            "Issue": "❌ DUPLICATE",
+                            "Details": "Name already exists in master file."
+                        })
+                        continue # If duplicate, don't bother checking syntax
+                    
+                    # CHECK B: SYNTAX PATTERN
+                    my_skel = get_skeleton(clean_name)
+                    if my_skel not in valid_skeletons:
+                        report.append({
+                            "Row": row_num,
+                            "Name": clean_name,
+                            "Issue": "⚠️ SUSPICIOUS SYNTAX",
+                            "Details": f"New Pattern: {my_skel}"
+                        })
+                
+                if report:
+                    st.error(f"Found {len(report)} Issues!")
+                    
+                    res_df = pd.DataFrame(report)
+                    
+                    # Color coding
+                    def highlight_rows(val):
+                        color = '#ffcccc' if val == "❌ DUPLICATE" else '#fff4cc'
+                        return f'background-color: {color}'
 
-                with col_extra:
-                    st.warning(f"⚠️ Extra Images ({len(extra_in_images)})")
-                    st.caption("Images you pasted that don't match any name in Excel.")
-                    if extra_in_images:
-                        st.dataframe(pd.DataFrame(extra_in_images, columns=["Orphaned Image"]), use_container_width=True)
-                    else:
-                        st.success("No extra images found.")
+                    st.dataframe(
+                        res_df.style.applymap(highlight_rows, subset=['Issue']),
+                        use_container_width=True
+                    )
+                else:
+                    st.balloons()
+                    st.success("✅ Perfect! No duplicates and all syntax patterns look familiar.")
