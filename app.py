@@ -9,7 +9,6 @@ st.title("Excel Validator: Glasses Edition 👓")
 
 # ==========================================
 # 🔒 LOCKED SECTION: MASTER LOADER
-# RESTORED: "The Version That Works So Great"
 # ==========================================
 @st.cache_data
 def load_master():
@@ -223,25 +222,24 @@ if uploaded_file:
                 st.success("✅ Amazing! No invalid values or whitespace errors found.")
 
     # ------------------------------------------
-    # TAB 2: NEW IMAGE NAME CHECKER
+    # TAB 2: NEW IMAGE NAME CHECKER (WITH TOOLTIP)
     # ------------------------------------------
     with tab2:
-        st.subheader("🖼️ Image Name vs. Excel Checker")
+        # Added the 'help' parameter here for the tooltip
+        st.subheader(
+            "🖼️ Image Name vs. Excel Checker", 
+            help="To get images paths go to the folder containing images -> Select all (Ctrl + A) -> Right click -> Copy as paths"
+        )
+        
         st.info("Paste your file paths below. I will clean them (remove folders, convert '_' to '/') and match them against Column A.")
 
         # 1. Get Excel Names (Try to find 'Glasses name', else take Column A)
-        # Note: If your column is literally named "Glasses name", this works.
-        # If it's the FIRST column (Column A), user_df.columns[0] grabs it.
-        target_col_name = "Glasses name" # Search priority
-        
-        # Try to find closest match to 'Glasses name', otherwise default to Column 0
+        target_col_name = "Glasses name" 
         found_col = next((c for c in user_df.columns if target_col_name.lower() in c.lower()), user_df.columns[0])
         
         st.write(f"📂 **Using Excel Column:** `{found_col}`")
         
-        # Load names from that column
         excel_names_raw = user_df[found_col].dropna().astype(str).tolist()
-        # Clean: trim spaces and lowercase
         excel_names_set = set(n.strip().lower() for n in excel_names_raw if n.strip())
         
         st.write(f"Found {len(excel_names_set)} unique names in Excel.")
@@ -253,29 +251,19 @@ if uploaded_file:
             if not pasted_paths.strip():
                 st.warning("Please paste some paths first!")
             else:
-                # Process Paths
                 pasted_lines = pasted_paths.split('\n')
                 found_images_set = set()
-                
-                debug_log = [] # To verify what the code sees
                 
                 for line in pasted_lines:
                     if not line.strip(): continue
                     
-                    # LOGIC:
-                    # 1. Get filename: C:\...\Name.png -> Name.png
                     filename = line.split('\\')[-1] 
-                    
-                    # 2. Remove extension: Name.png -> Name
-                    # (rsplit limits it to the last dot, handling dots in names better)
                     if '.' in filename:
                         clean_name = filename.rsplit('.', 1)[0]
                     else:
                         clean_name = filename
-                        
-                    # 3. Replace '_' with '/'
-                    clean_name = clean_name.replace('_', '/')
                     
+                    clean_name = clean_name.replace('_', '/')
                     final_name = clean_name.strip().lower()
                     found_images_set.add(final_name)
 
@@ -283,7 +271,6 @@ if uploaded_file:
                 missing_in_images = [n for n in excel_names_set if n not in found_images_set]
                 extra_in_images = [n for n in found_images_set if n not in excel_names_set]
 
-                # DISPLAY RESULTS
                 col_miss, col_extra = st.columns(2)
                 
                 with col_miss:
