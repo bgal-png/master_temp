@@ -7,11 +7,14 @@ import io
 st.set_page_config(page_title="Excel Validator v2", layout="wide")
 st.title("Excel Validator: Glasses Edition 👓")
 
-# --- HELPER: ROBUST LOADER ---
+# --- HELPER: INDESTRUCTIBLE LOADER ---
 @st.cache_data
 def load_master():
-    """Scans for master file. Handles CSV/Excel, splits commas."""
+    """
+    Tries to open the file as Excel. If that crashes, forces it open as CSV.
+    """
     current_dir = os.getcwd()
+    # Find any Excel or CSV file
     candidates = [f for f in os.listdir(current_dir) if (f.endswith('.xlsx') or f.endswith('.csv')) and "mistakes" not in f and not f.startswith('~$')]
     
     if not candidates:
@@ -20,19 +23,25 @@ def load_master():
     file_path = candidates[0]
     df = None
     
+    # ATTEMPT 1: EXCEL (Standard)
     try:
-        if file_path.endswith('.csv'):
-            for enc in ['utf-8', 'cp1252', 'latin1']:
-                try: df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc); break
-                except: continue
-        else:
-            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
-    except Exception as e:
-        st.error(f"❌ Failed to load '{file_path}': {e}"); st.stop()
-        
-    if df is None: st.error("❌ Could not read file."); st.stop()
+        df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
+    except Exception:
+        # ATTEMPT 2: CSV (Fallback for "Fake" Excel files)
+        # If Excel fails, we assume it's a CSV named .xlsx
+        for enc in ['utf-8', 'cp1252', 'latin1']:
+            try:
+                df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
+                st.toast(f"ℹ️ Note: Loaded '{file_path}' as a CSV file.", icon="⚠️")
+                break
+            except:
+                continue
+    
+    if df is None:
+        st.error(f"❌ Could not read '{file_path}'. It is not a valid Excel OR CSV file.")
+        st.stop()
 
-    # Clean headers
+    # Clean headers (remove extra spaces/newlines)
     df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
     
     # Filter for 'Glasses'
@@ -40,7 +49,7 @@ def load_master():
     if target_col:
         return df[df[target_col] == "Glasses"]
     else:
-        st.error("❌ 'Items type' missing in Master."); st.stop()
+        st.error("❌ 'Items type' column missing in Master File."); st.stop()
 
 def clean_user_file(file):
     """Loads user file, assumes Header is Row 0."""
@@ -109,8 +118,11 @@ if uploaded_file:
     master_cols = list(master_df.columns)
     
     for master_key, partial_user_key in IDEAL_PAIRS.items():
+        # Find Master Column
         real_master_col = next((c for c in master_cols if master_key in c), None)
+        # Find User Column
         real_user_col = next((c for c in user_cols if partial_user_key in c), None)
+        
         if real_master_col and real_user_col:
             active_map[real_master_col] = real_user_col
             
@@ -121,16 +133,19 @@ if uploaded_file:
         mistakes = []
         st.write("Checking data... please wait.")
         
-        # --- A. PREPARE MASTER DATA ---
+        # --- A. PREPARE MASTER DATA (Explode Commas) ---
         valid_values = {}
         for m_col in active_map.keys():
             raw_series = master_df[m_col].dropna().astype(str)
+            # Split by comma (handles "Black, White")
             exploded = raw_series.str.split(r',+').explode()
+            
             clean_set = set(exploded.str.strip().str.lower())
             if "" in clean_set: clean_set.remove("")
+            
             valid_values[m_col] = clean_set
 
-        # --- B. CHECK USER DATA ---
+        # --- B. CHECK USER DATA (Explode Pipes & Check Whitespace) ---
         progress_bar = st.progress(0)
         total_rows = len(user_df)
         
@@ -138,12 +153,11 @@ if uploaded_file:
             if index % 10 == 0: progress_bar.progress(min(index / total_rows, 1.0))
             
             for m_col, u_col in active_map.items():
-                # We get the RAW value to check for spaces
-                raw_cell_value = str(row[u_col]) # No strip() yet!
+                # Get RAW value (don't strip yet!)
+                raw_cell_value = str(row[u_col])
                 
-                # Handle NaNs
                 if raw_cell_value.lower() in ['nan', '', 'none']: continue
-                
+
                 # --- 1. WHITESPACE DETECTIVE 🕵️ ---
                 whitespace_issues = []
                 
@@ -158,19 +172,19 @@ if uploaded_file:
                     
                 if "| " in raw_cell_value or " |" in raw_cell_value:
                     whitespace_issues.append("Space around Separator '|'")
-
-                # Report Whitespace Errors
+                
                 for issue in whitespace_issues:
-                    mistakes.append({
+                     mistakes.append({
                         "Row": index + 2,
                         "Column": u_col,
                         "Error Type": "Whitespace Error",
                         "Invalid Value": issue,
-                        "Full Cell Content": f"'{raw_cell_value}'" # Quotes to show spaces
+                        "Full Cell Content": f"'{raw_cell_value}'",
+                        "Allowed (Example)": "Remove extra spaces"
                     })
 
                 # --- 2. VALUE VALIDATION ---
-                # Now we strip() to check the actual content validity
+                # Now split by pipe and check validity
                 clean_cell_value = raw_cell_value.strip()
                 user_values = [v.strip() for v in clean_cell_value.split('|')]
                 
@@ -193,14 +207,8 @@ if uploaded_file:
             st.error(f"Found {len(mistakes)} Issues!")
             results_df = pd.DataFrame(mistakes)
             
-            # Format nicely
-            st.dataframe(
-                results_df.style.applymap(
-                    lambda x: 'color: red' if x == "Whitespace Error" else 'color: orange', 
-                    subset=['Error Type']
-                ), 
-                use_container_width=True
-            )
+            # Use Styler only if available (prevents some display bugs)
+            st.dataframe(results_df, use_container_width=True)
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
