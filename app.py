@@ -9,11 +9,18 @@ st.title("Excel Validator: Glasses Edition 👓")
 
 # ==========================================
 # 🔒 LOCKED: MAIN MASTER LOADER (Tab 1)
+# RESTORED: The "Indestructible" Version
 # ==========================================
 @st.cache_data
 def load_master():
-    """TRULY INDESTRUCTIBLE LOADER for Main Data"""
+    """
+    TRULY INDESTRUCTIBLE LOADER
+    1. Tries Excel (.xlsx)
+    2. If that fails, tries CSV with Auto-Separator.
+    3. If that fails, tries CSV with comma/semicolon explicitly.
+    """
     current_dir = os.getcwd()
+    # Exclude 'name_master' so we don't accidentally load the wrong file here
     candidates = [f for f in os.listdir(current_dir) if (f.endswith('.xlsx') or f.endswith('.csv')) and "mistakes" not in f and "name_master" not in f and not f.startswith('~$')]
     
     if not candidates:
@@ -22,33 +29,44 @@ def load_master():
     file_path = candidates[0]
     df = None
     
-    # ATTEMPT 1: EXCEL
+    # ATTEMPT 1: EXCEL (Standard)
     try:
         df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
     except Exception:
-        # ATTEMPT 2: CSV
+        # ATTEMPT 2: CSV (Fallback loop)
         strategies = [
-            {'sep': None, 'engine': 'python'}, 
-            {'sep': ',', 'engine': 'c'}, 
-            {'sep': ';', 'engine': 'c'}, 
-            {'sep': '\t', 'engine': 'c'}
+            {'sep': None, 'engine': 'python'}, # Auto-detect
+            {'sep': ',', 'engine': 'c'},       # Standard Comma
+            {'sep': ';', 'engine': 'c'},       # Semicolon
+            {'sep': '\t', 'engine': 'c'}       # Tab
         ]
+        
         for enc in ['utf-8', 'cp1252', 'latin1']:
             for strat in strategies:
                 try:
-                    df = pd.read_csv(file_path, dtype=str, encoding=enc, on_bad_lines='skip', **strat)
+                    df = pd.read_csv(
+                        file_path, 
+                        dtype=str, 
+                        encoding=enc, 
+                        on_bad_lines='skip', 
+                        **strat
+                    )
                     st.toast(f"ℹ️ Loaded '{file_path}' as CSV (Fallback).", icon="ℹ️")
                     break
-                except: continue
-            if df is not None: break
+                except:
+                    continue
+            if df is not None:
+                break
     
     if df is None:
         st.error(f"❌ Could not read '{file_path}'. Tried Excel and all CSV formats.")
         st.stop()
 
+    # Clean headers
     df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
-    target_col = next((c for c in df.columns if "Items type" in c), None)
     
+    # Filter for 'Glasses'
+    target_col = next((c for c in df.columns if "Items type" in c), None)
     if target_col:
         return df[df[target_col] == "Glasses"]
     else:
@@ -76,11 +94,9 @@ def load_name_master():
 
     # DEFINING THE FILTER:
     # We use a lambda function to tell Pandas WHICH columns to keep.
-    # This prevents loading the other 40+ columns into RAM.
     def column_filter(col_name):
         if not isinstance(col_name, str): return False
         c = col_name.strip().lower()
-        # We only want 'name' (exact) or 'name_private' (contains)
         return c == "name" or "name_private" in c
 
     # ATTEMPT 1: EXCEL (With Column Filter)
@@ -89,7 +105,7 @@ def load_name_master():
             target_filename, 
             dtype=str, 
             engine='openpyxl',
-            usecols=column_filter # <--- This makes it "Surgical"
+            usecols=column_filter
         )
     except Exception:
         # ATTEMPT 2: CSV (With Column Filter)
@@ -102,7 +118,7 @@ def load_name_master():
                         dtype=str, 
                         encoding=enc, 
                         on_bad_lines='skip', 
-                        usecols=column_filter, # <--- "Surgical" here too
+                        usecols=column_filter,
                         **strat
                     )
                     break
@@ -151,8 +167,8 @@ def get_skeleton(text):
 
 # LOAD DATA
 with st.spinner("Loading Databases..."):
-    master_df = load_master() 
-    name_master_list = load_name_master()
+    master_df = load_master() # Original Indestructible Loader
+    name_master_list = load_name_master() # Surgical Loader
 
 st.success(f"✅ Main Master Loaded ({len(master_df)} rows).")
 
