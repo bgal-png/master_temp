@@ -10,10 +10,7 @@ st.title("Excel Validator: Glasses Edition 👓")
 # --- HELPER: ROBUST LOADER ---
 @st.cache_data
 def load_master():
-    """
-    Scans for master file. Tries Excel first. 
-    If that fails (e.g. it's a CSV named .xlsx), switches to CSV mode automatically.
-    """
+    """Scans for master file. Handles CSV/Excel, splits commas."""
     current_dir = os.getcwd()
     candidates = [f for f in os.listdir(current_dir) if (f.endswith('.xlsx') or f.endswith('.csv')) and "mistakes" not in f and not f.startswith('~$')]
     
@@ -23,25 +20,19 @@ def load_master():
     file_path = candidates[0]
     df = None
     
-    # ATTEMPT 1: EXCEL
     try:
-        df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
-    except Exception:
-        # ATTEMPT 2: CSV (Fallback)
-        # We try common encodings just in case
-        for enc in ['utf-8', 'cp1252', 'latin1']:
-            try:
-                df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc)
-                st.toast(f"ℹ️ Loaded '{file_path}' as a CSV.", icon="⚠️")
-                break
-            except:
-                continue
-    
-    if df is None:
-        st.error(f"❌ Could not read '{file_path}'. It is not a valid Excel or CSV file.")
-        st.stop()
+        if file_path.endswith('.csv'):
+            for enc in ['utf-8', 'cp1252', 'latin1']:
+                try: df = pd.read_csv(file_path, dtype=str, sep=None, engine='python', encoding=enc); break
+                except: continue
+        else:
+            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
+    except Exception as e:
+        st.error(f"❌ Failed to load '{file_path}': {e}"); st.stop()
+        
+    if df is None: st.error("❌ Could not read file."); st.stop()
 
-    # Clean headers (remove extra spaces/newlines)
+    # Clean headers
     df.columns = df.columns.astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
     
     # Filter for 'Glasses'
@@ -49,10 +40,10 @@ def load_master():
     if target_col:
         return df[df[target_col] == "Glasses"]
     else:
-        st.error("❌ 'Items type' column missing in Master File."); st.stop()
+        st.error("❌ 'Items type' missing in Master."); st.stop()
 
 def clean_user_file(file):
-    """Loads user file, always using the first row (0) as header."""
+    """Loads user file, assumes Header is Row 0."""
     try:
         df = pd.read_excel(file, dtype=str, header=0)
     except:
@@ -118,11 +109,8 @@ if uploaded_file:
     master_cols = list(master_df.columns)
     
     for master_key, partial_user_key in IDEAL_PAIRS.items():
-        # Find Master Column
         real_master_col = next((c for c in master_cols if master_key in c), None)
-        # Find User Column
         real_user_col = next((c for c in user_cols if partial_user_key in c), None)
-        
         if real_master_col and real_user_col:
             active_map[real_master_col] = real_user_col
             
@@ -133,19 +121,16 @@ if uploaded_file:
         mistakes = []
         st.write("Checking data... please wait.")
         
-        # --- A. PREPARE MASTER DATA (Explode Commas) ---
+        # --- A. PREPARE MASTER DATA ---
         valid_values = {}
         for m_col in active_map.keys():
             raw_series = master_df[m_col].dropna().astype(str)
-            # Split by comma (handles "Black, White")
             exploded = raw_series.str.split(r',+').explode()
-            
             clean_set = set(exploded.str.strip().str.lower())
             if "" in clean_set: clean_set.remove("")
-            
             valid_values[m_col] = clean_set
 
-        # --- B. CHECK USER DATA (Explode Pipes) ---
+        # --- B. CHECK USER DATA ---
         progress_bar = st.progress(0)
         total_rows = len(user_df)
         
@@ -153,19 +138,50 @@ if uploaded_file:
             if index % 10 == 0: progress_bar.progress(min(index / total_rows, 1.0))
             
             for m_col, u_col in active_map.items():
-                raw_cell_value = str(row[u_col]).strip()
+                # We get the RAW value to check for spaces
+                raw_cell_value = str(row[u_col]) # No strip() yet!
+                
+                # Handle NaNs
                 if raw_cell_value.lower() in ['nan', '', 'none']: continue
                 
-                # Split User Value by Pipe '|'
-                user_values = [v.strip() for v in raw_cell_value.split('|')]
+                # --- 1. WHITESPACE DETECTIVE 🕵️ ---
+                whitespace_issues = []
+                
+                if raw_cell_value.startswith(" "):
+                    whitespace_issues.append("Leading Space (Start)")
+                
+                if raw_cell_value.endswith(" "):
+                    whitespace_issues.append("Trailing Space (End)")
+                
+                if "  " in raw_cell_value:
+                    whitespace_issues.append("Double Spaces detected")
+                    
+                if "| " in raw_cell_value or " |" in raw_cell_value:
+                    whitespace_issues.append("Space around Separator '|'")
+
+                # Report Whitespace Errors
+                for issue in whitespace_issues:
+                    mistakes.append({
+                        "Row": index + 2,
+                        "Column": u_col,
+                        "Error Type": "Whitespace Error",
+                        "Invalid Value": issue,
+                        "Full Cell Content": f"'{raw_cell_value}'" # Quotes to show spaces
+                    })
+
+                # --- 2. VALUE VALIDATION ---
+                # Now we strip() to check the actual content validity
+                clean_cell_value = raw_cell_value.strip()
+                user_values = [v.strip() for v in clean_cell_value.split('|')]
                 
                 for val in user_values:
                     if not val: continue
                     
                     if val.lower() not in valid_values[m_col]:
                         mistakes.append({
-                            "Row": index + 2, # +2 for header and 0-index
+                            "Row": index + 2,
                             "Column": u_col,
+                            "Error Type": "Invalid Content",
                             "Invalid Value": val,
                             "Full Cell Content": raw_cell_value,
                             "Allowed (Example)": list(valid_values[m_col])[:3]
@@ -174,9 +190,17 @@ if uploaded_file:
         progress_bar.empty()
 
         if mistakes:
-            st.error(f"Found {len(mistakes)} Invalid Values!")
+            st.error(f"Found {len(mistakes)} Issues!")
             results_df = pd.DataFrame(mistakes)
-            st.dataframe(results_df, use_container_width=True)
+            
+            # Format nicely
+            st.dataframe(
+                results_df.style.applymap(
+                    lambda x: 'color: red' if x == "Whitespace Error" else 'color: orange', 
+                    subset=['Error Type']
+                ), 
+                use_container_width=True
+            )
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
@@ -184,4 +208,4 @@ if uploaded_file:
             st.download_button("📥 Download Error Report", buffer, "validation_errors.xlsx")
         else:
             st.balloons()
-            st.success("✅ Amazing! No invalid values found.")
+            st.success("✅ Amazing! No invalid values or whitespace errors found.")
